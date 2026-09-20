@@ -1,0 +1,46 @@
+{
+  "name": "household-ledger",
+  "private": true,
+  "version": "2.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k -n web,api -c cyan,magenta \"vite --host\" \"tsx watch server/index.ts\"",
+    "dev:web": "vite --host",
+    "dev:api": "tsx watch server/index.ts",
+    "build": "npm run typecheck && vite build",
+    "start": "cross-env NODE_ENV=production tsx server/index.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.server.json",
+    "secrets": "node -e \"const c=require('crypto');console.log('JWT_SECRET='+c.randomBytes(48).toString('hex'));console.log('RECOVERY_PEPPER='+c.randomBytes(48).toString('hex'))\""
+  },
+  "dependencies": {
+    "@fontsource-variable/bricolage-grotesque": "^5.3.0",
+    "@fontsource/instrument-sans": "^5.3.0",
+    "cross-env": "^10.1.0",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.7.0",
+    "helmet": "^8.3.0",
+    "jose": "^6.2.12",
+    "lucide-react": "^1.47.0",
+    "pg": "^8.23.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "tsx": "^4.23.15",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.6.2",
+    "@types/pg": "^8.23.1",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "concurrently": "^10.0.5",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.0",
+    "vitest": "^5.0.1"
+  }
+}

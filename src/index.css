@@ -1,0 +1,186 @@
+@import "tailwindcss";
+
+/* touch screens get bigger targets: use as coarse:... */
+@custom-variant coarse (@media (pointer: coarse));
+
+@theme inline {
+  --font-sans: "Instrument Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-display: "Bricolage Grotesque Variable", "Instrument Sans", system-ui, sans-serif;
+  --color-canvas: var(--bg);
+  --color-panel: var(--panel);
+  --color-cell: var(--cell);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-lineStrong: var(--line-strong);
+  --color-head: var(--head);
+  --color-headhl: var(--head-hl);
+  --color-accent: var(--accent);
+  --color-onaccent: var(--accent-ink);
+  --color-sel: var(--sel);
+  --color-fx: var(--fx);
+  --color-err: var(--err);
+  --color-softaccent: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+/* ---------------------------------------------------------------------------
+   Themes. A palette is just a hue + how colourful the accent is; light and dark
+   are derived from it, so every palette works in both modes.
+   --------------------------------------------------------------------------- */
+:root,
+[data-palette] {
+  --h: 190;
+  --c: 0.085;
+  --bg: oklch(0.945 0.012 var(--h));
+  --panel: oklch(0.975 0.007 var(--h));
+  --cell: oklch(1 0 0);
+  --ink: oklch(0.27 0.03 var(--h));
+  --muted: oklch(0.5 0.03 var(--h));
+  --line: oklch(0.885 0.014 var(--h));
+  --line-strong: color-mix(in oklab, var(--ink) 34%, var(--line));
+  --head: oklch(0.92 0.014 var(--h));
+  --head-hl: oklch(0.86 0.035 var(--h));
+  --accent: oklch(0.5 var(--c) var(--h));
+  --accent-ink: #ffffff;
+  --sel: oklch(0.5 var(--c) var(--h) / 0.14);
+  --fx: #c68a1b;
+  --err: #b3372b;
+  --shadow: 0 10px 30px -8px rgb(15 30 35 / 0.28), 0 2px 6px rgb(15 30 35 / 0.1);
+  --f1: #fbefc0; --f2: #d2ebd4; --f3: #d0e3f5; --f4: #f5d5db;
+  --f5: #e3e5e1; --f6: #f8dac0; --f7: #e1d8f2; --f8: #f1b9b1;
+  color-scheme: light;
+}
+[data-palette="ocean"] { --h: 250; --c: 0.13; }
+[data-palette="violet"] { --h: 295; --c: 0.15; }
+[data-palette="rose"] { --h: 5; --c: 0.16; }
+[data-palette="copper"] { --h: 60; --c: 0.12; }
+[data-palette="forest"] { --h: 150; --c: 0.1; }
+[data-palette="slate"] { --h: 255; --c: 0.04; }
+[data-palette="mono"] { --h: 0; --c: 0; }
+[data-palette="mono"] { --bg: oklch(0.94 0 0); --panel: oklch(0.975 0 0); --ink: oklch(0.25 0 0); --muted: oklch(0.5 0 0); --line: oklch(0.88 0 0); --head: oklch(0.91 0 0); --head-hl: oklch(0.84 0 0); }
+
+[data-mode="dark"] {
+  --bg: oklch(0.19 0.014 var(--h));
+  --panel: oklch(0.235 0.016 var(--h));
+  --cell: oklch(0.21 0.014 var(--h));
+  --ink: oklch(0.93 0.012 var(--h));
+  --muted: oklch(0.72 0.03 var(--h));
+  --line: oklch(0.32 0.02 var(--h));
+  --line-strong: color-mix(in oklab, var(--ink) 30%, var(--line));
+  --head: oklch(0.26 0.018 var(--h));
+  --head-hl: oklch(0.36 0.045 var(--h));
+  --accent: oklch(0.78 var(--c) var(--h));
+  --accent-ink: oklch(0.2 0.03 var(--h));
+  --sel: oklch(0.78 var(--c) var(--h) / 0.2);
+  --fx: #e0a83a;
+  --err: #ff8a7a;
+  --shadow: 0 10px 30px -8px rgb(0 0 0 / 0.6), 0 2px 6px rgb(0 0 0 / 0.4);
+  --f1: #4a4220; --f2: #22452c; --f3: #213a50; --f4: #502b34;
+  --f5: #333b3b; --f6: #56361e; --f7: #40305a; --f8: #6a2e2a;
+  color-scheme: dark;
+}
+[data-palette="mono"][data-mode="dark"] {
+  --bg: oklch(0.18 0 0); --panel: oklch(0.23 0 0); --cell: oklch(0.2 0 0); --ink: oklch(0.94 0 0);
+  --muted: oklch(0.72 0 0); --line: oklch(0.32 0 0); --head: oklch(0.26 0 0); --head-hl: oklch(0.36 0 0);
+}
+
+/* ---------------------------------------------------------------------------
+   Page shell: locked to the visible screen so the phone keyboard never pushes it around
+   --------------------------------------------------------------------------- */
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 14px/1.4 "Instrument Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  position: fixed; left: 0; top: 0; width: 100%;
+  display: flex; flex-direction: column;
+  height: 100vh; height: 100dvh; height: var(--vh, 100dvh);
+  overflow: hidden;
+  box-sizing: border-box;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+}
+#root { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+button:focus-visible, select:focus-visible, input:focus-visible, [role="tab"]:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+@media (pointer: coarse) { input { font-size: 16px; } } /* stops iOS zooming into inputs */
+
+/* ---------------------------------------------------------------------------
+   The grid
+   --------------------------------------------------------------------------- */
+:root { --row-h: 28px; --rh-w: 46px; }
+@media (pointer: coarse) { :root { --row-h: 32px; --rh-w: 40px; } }
+
+.sheet-wrap {
+  scroll-padding: 32px 0 0 var(--rh-w);
+  overscroll-behavior: contain;
+  touch-action: manipulation;
+  -webkit-overflow-scrolling: touch;
+}
+table.sheet { border-collapse: separate; border-spacing: 0; table-layout: fixed; }
+.sheet th, .sheet td {
+  height: var(--row-h); padding: 0 8px;
+  border-right: 1px solid var(--line); border-bottom: 1px solid var(--line);
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-weight: 400;
+}
+.sheet th { background: var(--head); color: var(--muted); font-size: 12px; user-select: none; -webkit-user-select: none; text-align: center; padding: 0; }
+.sheet thead th { position: sticky; top: 0; z-index: 3; }
+.sheet th.rh { position: sticky; left: 0; z-index: 2; }
+.sheet th.corner { position: sticky; left: 0; top: 0; z-index: 4; }
+.sheet th.hl { background: var(--head-hl); color: var(--ink); }
+.sheet th.ch .rz { position: absolute; top: 0; right: -3px; bottom: 0; width: 7px; cursor: col-resize; z-index: 1; touch-action: none; }
+.sheet th.ch .rz:hover, .sheet th.ch .rz:active { background: var(--accent); opacity: 0.5; }
+@media (pointer: coarse) { .sheet th.ch .rz { right: -8px; width: 16px; } }
+
+.sheet td { position: relative; background-color: var(--cell); cursor: cell; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.sheet td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.sheet td.b { font-weight: 600; }
+.sheet td.mg:not(.num) { text-align: center; }
+.sheet td.mgv { white-space: normal; line-height: 1.25; }
+.sheet td.err { color: var(--err); font-weight: 600; }
+.sheet td.fx { background-image: linear-gradient(225deg, var(--fx) 5px, transparent 5px); }
+
+/* Fill colour + opacity. The colour is mixed with "transparent" so the opacity slider really
+   makes it see-through, and it stops at the padding edge so it never paints over a border. */
+.sheet td[data-f] {
+  background-color: color-mix(in srgb, var(--fc) var(--fo, 100%), transparent);
+  background-clip: padding-box;
+}
+/* Borders around coloured cells use a stronger line colour, so a block of colour keeps its grid
+   at any opacity (a cell draws its right / bottom edge, and also the edge of a coloured neighbour). */
+.sheet td.sr { border-right-color: var(--line-strong); }
+.sheet td.sb { border-bottom-color: var(--line-strong); }
+
+.sheet td.sel::after { content: ""; position: absolute; inset: 0; background: var(--sel); pointer-events: none; }
+.sheet td.active { outline: 2px solid var(--accent); outline-offset: -2px; z-index: 1; }
+.sheet td.active::after { display: none; }
+.sheet td.cp::before { content: ""; position: absolute; inset: 0; pointer-events: none; border: 0 dashed var(--fx); z-index: 1; }
+.sheet td.cpt::before { border-top-width: 2px; }
+.sheet td.cpb::before { border-bottom-width: 2px; }
+.sheet td.cpl::before { border-left-width: 2px; }
+.sheet td.cpr::before { border-right-width: 2px; }
+
+/* while pointing at another tab from a formula, the real editor stays focused but invisible */
+.ed-away { opacity: 0; pointer-events: none; width: 1px !important; height: 1px !important; left: 0 !important; top: 0 !important; }
+
+/* scrollbars that fit the theme */
+* { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+
+/* small helpers */
+.no-scrollbar { scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+@keyframes sheet-up { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes pop-in { from { transform: translateY(-4px) scale(0.98); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { * { animation-duration: 0.001ms !important; } }
+
+.sheet th.sr { border-right-color: var(--line-strong); }
+.sheet th.sb { border-bottom-color: var(--line-strong); }
+.anim-sheet { animation: sheet-up 0.22s cubic-bezier(0.2, 0.8, 0.2, 1); }
+.anim-pop { animation: pop-in 0.12s ease-out; }
+.anim-fade { animation: fade-in 0.15s ease-out; }
+@media (min-width: 640px) { .anim-sheet { animation: pop-in 0.12s ease-out; } }
+.chk { background-image: linear-gradient(45deg, var(--line) 25%, transparent 25% 75%, var(--line) 75%), linear-gradient(45deg, var(--line) 25%, transparent 25% 75%, var(--line) 75%); background-size: 10px 10px; background-position: 0 0, 5px 5px; }

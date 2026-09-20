@@ -1,0 +1,10 @@
+{
+  "name": "Household ledger",
+  "short_name": "Ledger",
+  "description": "A small spreadsheet for household bills, meter readings and budgets.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#E9EFEE",
+  "theme_color": "#1D6B67",
+  "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

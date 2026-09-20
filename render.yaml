@@ -1,0 +1,28 @@
+# Render Blueprint: one web service that serves both the web app and the API.
+# Render dashboard -> New -> Blueprint -> pick this repository.
+services:
+  - type: web
+    name: household-ledger
+    runtime: node
+    plan: free
+    autoDeployTrigger: commit
+    # devDependencies are needed to build the web app (vite, tailwind, typescript)
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      # Render puts a proxy in front of the app: needed so rate limits see each visitor's real IP
+      - key: TRUST_PROXY
+        value: "1"
+      # Your Neon POOLED connection string. Render asks for it when you create the Blueprint.
+      - key: DATABASE_URL
+        sync: false
+      # Signs the login tokens. Render generates a strong random value once (changing it only signs everyone out).
+      - key: JWT_SECRET
+        generateValue: true
+      # Protects the 6 digit recovery codes. Paste your own value when Render asks, and keep a backup of it.
+      # NEVER change it after people have accounts, or their recovery codes stop working.
+      - key: RECOVERY_PEPPER
+        sync: false
