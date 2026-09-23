@@ -9,7 +9,8 @@ function mem() {
   const m = new Map<string, string>();
   return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v) };
 }
-const fresh = () => new Store(mem(), false);
+// these tests check the underlying mutation engine, not the confirmation layer, so confirmMode starts off
+const fresh = () => { const s = new Store(mem(), false); s.confirmMode = false; return s; };
 const val = (s: Store, r: number, c: number, si = s.W.cur) => s.ev.display(si, r, c).t;
 const put = (s: Store, r: number, c: number, v: string) => setCell(s.S, r, c, { v });
 function wb(...rows: string[][]): Workbook {
@@ -95,6 +96,7 @@ describe('structure changes keep formulas correct', () => {
   });
   it('deleting a referenced row gives #REF!', () => {
     const s = new Store(mem());
+    s.confirmMode = false;
     s.W = { cur: 0, sheets: [{ name: 'Tab1', data: blank() }] };
     put(s, 0, 0, '5'); put(s, 1, 0, '7'); put(s, 2, 0, '=A1+A2');
     s.sel = { ar: 1, ac: 0, fr: 1, fc: 0 };
@@ -104,6 +106,7 @@ describe('structure changes keep formulas correct', () => {
   });
   it('deleting a row inside a range shrinks the range', () => {
     const s = new Store(mem());
+    s.confirmMode = false;
     s.W = { cur: 0, sheets: [{ name: 'Tab1', data: blank() }] };
     [1, 2, 3, 4].forEach((n, i) => put(s, i, 0, String(n)));
     put(s, 5, 0, '=SUM(A1:A4)');
@@ -114,6 +117,7 @@ describe('structure changes keep formulas correct', () => {
   });
   it('insert / delete column', () => {
     const s = new Store(mem());
+    s.confirmMode = false;
     s.W = { cur: 0, sheets: [{ name: 'Tab1', data: blank() }] };
     put(s, 0, 1, '2'); put(s, 0, 2, '=B1*3');
     s.sel = { ar: 0, ac: 0, fr: 0, fc: 0 };
@@ -150,6 +154,7 @@ describe('copy and paste', () => {
   });
   it('fill down copies formulas with shifted references', () => {
     const s = new Store(mem());
+    s.confirmMode = false;
     s.W = { cur: 0, sheets: [{ name: 'Tab1', data: blank() }] };
     put(s, 0, 0, '1'); put(s, 0, 1, '=A1*2');
     s.sel = { ar: 0, ac: 1, fr: 3, fc: 1 };
@@ -210,6 +215,7 @@ describe('fill colour and opacity', () => {
 describe('merge cells', () => {
   it('merges keep only the top-left value and can be undone', () => {
     const s = new Store(mem());
+    s.confirmMode = false;
     s.W = { cur: 0, sheets: [{ name: 'Tab1', data: blank() }] };
     put(s, 0, 0, 'a'); put(s, 0, 1, 'b'); put(s, 1, 0, 'c');
     s.sel = { ar: 0, ac: 0, fr: 1, fc: 1 };
@@ -266,6 +272,7 @@ describe('tabs', () => {
   });
   it('cannot delete the last tab', () => {
     const s = new Store(mem());
+    s.confirmMode = false;
     s.W = { cur: 0, sheets: [{ name: 'Tab1', data: blank() }] };
     s.deleteTab();
     expect(s.W.sheets.length).toBe(1);
@@ -306,6 +313,7 @@ describe('editing', () => {
   it('persists to storage and loads back', () => {
     const st = mem();
     const a = new Store(st);
+    a.confirmMode = false;
     a.sel = { ar: 20, ac: 0, fr: 20, fc: 0 };
     a.startEdit('saved');
     a.commitEdit();

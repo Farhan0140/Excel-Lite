@@ -10,6 +10,7 @@ import {
 import type { StorageLike } from './model';
 import { downloadFile } from './download';
 import { buildPdf } from './pdf';
+import { FILLS } from './palette';
 
 export interface Clip {
   cells: (Cell | null)[][];
@@ -19,6 +20,25 @@ export interface Clip {
 }
 export interface Suggestion { kind: 'fn' | 'tab'; name: string; d: string }
 export type InputId = 'ed' | 'fb';
+
+// a change waiting for the user's say-so ("Change A4 from 0 to 10?")
+export interface ConfirmDesc { title: string; message: string; danger?: boolean; confirmLabel?: string }
+export interface PendingChange extends ConfirmDesc { run: () => void; cancel: () => void }
+
+function shortValue(v: string): string {
+  if (v === '') return '(empty)';
+  const t = v.length > 40 ? v.slice(0, 37) + '…' : v;
+  return '"' + t + '"';
+}
+function describeValueChange(address: string, oldV: string, newV: string): string {
+  if (oldV === '') return 'Set ' + address + ' to ' + shortValue(newV) + '?';
+  if (newV === '') return 'Clear ' + address + ' (currently ' + shortValue(oldV) + ')?';
+  return 'Change ' + address + ' from ' + shortValue(oldV) + ' to ' + shortValue(newV) + '?';
+}
+function fillName(n: number): string {
+  const f = FILLS.find((x) => x.n === n);
+  return f ? f.name : 'colour ' + n;
+}
 
 export const FUNCS = [
   { name: 'SUM', d: 'Add up numbers or a range' },
@@ -65,6 +85,10 @@ export class Store {
   fillOpacity = 100;
   revealReq = false;
 
+  // ask before every change ("permission modal"): on by default, one at a time
+  confirmMode = true;
+  pending: PendingChange | null = null;
+
   cover = new Map<string, Merge>();
   // bumped on: any change (tick), data/structure change (ver), selection change (selVer)
   tick = 0;
@@ -95,6 +119,7 @@ export class Store {
     try {
       const u = JSON.parse(storage?.getItem(UI_KEY) || '{}');
       if (u && u.fillOpacity >= 10 && u.fillOpacity <= 100) this.fillOpacity = Math.round(u.fillOpacity);
+      if (u && typeof u.confirmMode === 'boolean') this.confirmMode = u.confirmMode;
     } catch { /* ignore */ }
     this.applyMerges();
   }
@@ -171,6 +196,10 @@ export class Store {
     }
     return R;
   }
+  // "A4" for one cell, "A1:B3" for a block — used in confirmation messages
+  addressOf(R: Range): string {
+    return R.r0 === R.r1 && R.c0 === R.c1 ? ref(R.r0, R.c0) : ref(R.r0, R.c0) + ':' + ref(R.r1, R.c1);
+  }
   snap(r: number, c: number): [number, number] {
     const m = this.cover.get(key(r, c));
     return m ? [m.r0, m.c0] : [r, c];
@@ -232,24 +261,33 @@ export class Store {
         const x = S.cells[key(r, c)];
         if (x && x.v !== '') lost++;
       }
-    this.mutate(() => {
-      this.unmergeArea(R.r0, R.c0, R.r1, R.c1);
-      for (let r = R.r0; r <= R.r1; r++)
-        for (let c = R.c0; c <= R.c1; c++) {
-          if (r === R.r0 && c === R.c0) continue;
-          delete this.S.cells[key(r, c)];
-        }
-      this.S.merges.push({ r0: R.r0, c0: R.c0, r1: R.r1, c1: R.c1 });
-      this.sel = { ar: R.r0, ac: R.c0, fr: R.r1, fc: R.c1 };
-      this.copyRange = null;
+    const address = this.addressOf(R);
+    const message = lost
+      ? 'Merge ' + address + ' into one cell? Only the top-left value is kept — ' + lost + ' other value' + (lost > 1 ? 's' : '') + ' will be hidden (Undo brings them back).'
+      : 'Merge ' + address + ' into one cell?';
+    this.gate({ title: 'Merge cells', message, danger: !!lost, confirmLabel: 'Merge' }, () => {
+      this.mutate(() => {
+        this.unmergeArea(R.r0, R.c0, R.r1, R.c1);
+        for (let r = R.r0; r <= R.r1; r++)
+          for (let c = R.c0; c <= R.c1; c++) {
+            if (r === R.r0 && c === R.c0) continue;
+            delete this.S.cells[key(r, c)];
+          }
+        this.S.merges.push({ r0: R.r0, c0: R.c0, r1: R.r1, c1: R.c1 });
+        this.sel = { ar: R.r0, ac: R.c0, fr: R.r1, fc: R.c1 };
+        this.copyRange = null;
+      });
+      this.flash(lost ? 'Combined. Only the top-left value was kept. Undo brings back the ' + lost + ' other value' + (lost > 1 ? 's' : '') + '.' : 'Cells combined into one box.');
     });
-    this.flash(lost ? 'Combined. Only the top-left value was kept. Undo brings back the ' + lost + ' other value' + (lost > 1 ? 's' : '') + '.' : 'Cells combined into one box.');
   }
   unmergeSel() {
     const R = this.rng();
     if (!this.hasMerge(R)) { this.flash('No combined cells in the selection.'); return; }
-    this.mutate(() => { this.unmergeArea(R.r0, R.c0, R.r1, R.c1); this.copyRange = null; });
-    this.flash('Cells separated again.');
+    const address = this.addressOf(R);
+    this.gate({ title: 'Unmerge cells', message: 'Unmerge the cells in ' + address + '?', confirmLabel: 'Unmerge' }, () => {
+      this.mutate(() => { this.unmergeArea(R.r0, R.c0, R.r1, R.c1); this.copyRange = null; });
+      this.flash('Cells separated again.');
+    });
   }
 
   /* ---------- history / mutation ---------- */
@@ -283,6 +321,35 @@ export class Store {
     fn();
     this.save();
     this.refresh();
+  }
+  /* ---------- ask first ("permission modal") ----------
+     When confirmMode is on, a mutation is held as `pending` instead of running immediately; the UI shows
+     a modal built from `desc` and the change only happens once the user presses Confirm. Only one change
+     waits at a time — starting a new edit while one is pending is blocked (see startEdit). */
+  private gate(desc: ConfirmDesc, fn: () => void) {
+    if (!this.confirmMode) { fn(); return; }
+    if (this.pending) { this.flash('Please confirm or cancel the change that is waiting first.'); return; }
+    this.pending = {
+      ...desc,
+      run: () => { this.pending = null; fn(); this.emit(); },
+      cancel: () => { this.pending = null; this.emit(); },
+    };
+    this.emit();
+  }
+  confirmPending() {
+    this.pending?.run();
+  }
+  cancelPending() {
+    this.pending?.cancel();
+  }
+  private saveUiPrefs() {
+    try { this.storage?.setItem(UI_KEY, JSON.stringify({ fillOpacity: this.fillOpacity, confirmMode: this.confirmMode })); } catch { /* ignore */ }
+  }
+  toggleConfirmMode() {
+    this.confirmMode = !this.confirmMode;
+    this.saveUiPrefs();
+    this.flash(this.confirmMode ? 'Changes will now ask you to confirm first.' : 'Changes now apply right away, without asking.');
+    this.emit();
   }
   private clampSel() {
     const S = this.S, sel = this.sel;
@@ -354,6 +421,7 @@ export class Store {
   }
   startEdit(text: string, fromBar = false) {
     if (this.editing) return;
+    if (this.pending) { this.flash('Please confirm or cancel the pending change first.'); return; }
     this.editing = true;
     this.edit = { si: this.W.cur, r: this.sel.ar, c: this.sel.ac };
     this.editText = text;
@@ -371,8 +439,13 @@ export class Store {
     if (this.W.cur !== this.edit.si) { this.stashSheet(); this.loadSheet(this.edit.si); }
     let v = this.editText;
     if (v.trim()[0] === '=') v = canonSheets(v.trim().toUpperCase(), this.W.sheets);
-    const { r, c } = this.edit, cur = this.S.cells[key(r, c)];
-    if ((cur ? cur.v : '') !== v) this.mutate(() => setCell(this.S, r, c, { v }));
+    const { r, c } = this.edit, cur = this.S.cells[key(r, c)], curV = cur ? cur.v : '';
+    if (curV === v) return;
+    const address = ref(r, c);
+    this.gate(
+      { title: 'Change ' + address, message: describeValueChange(address, curV, v), confirmLabel: 'Change' },
+      () => this.mutate(() => setCell(this.S, r, c, { v })),
+    );
   }
   private closeEditor() {
     this.editing = false;
@@ -417,7 +490,7 @@ export class Store {
     if (this.sugKeys(e)) return;
     if (e.key === 'Enter') {
       e.preventDefault();
-      if (this.coarse && this.editing && this.W.cur === this.edit.si) { this.editNext(); return; }
+      if (this.coarse && this.editing && this.W.cur === this.edit.si && !this.confirmMode) { this.editNext(); return; }
       this.commitEdit(); this.focusGrid(); this.move(1, 0, false);
     } else if (e.key === 'Tab') {
       e.preventDefault();
@@ -589,7 +662,8 @@ export class Store {
       const away = this.W.cur !== this.edit.si;
       if (td && this.refInsertOK()) { e.preventDefault(); this.insertRef(+td.dataset.r!, +td.dataset.c!); return; }
       // phone: one tap on any other cell jumps the editor there and keeps the keyboard open
-      if (td && this.coarse && !away && !e.shiftKey && !this.extendMode) {
+      // (off while confirming every change, so a tap can never race a pending confirmation)
+      if (td && this.coarse && !away && !this.confirmMode && !e.shiftKey && !this.extendMode) {
         e.preventDefault();
         this.tapEdit = false;
         this.retarget(+td.dataset.r!, +td.dataset.c!);
@@ -722,52 +796,58 @@ export class Store {
     const R = this.rng(), tr = R.r0, tc = R.c0, selH = R.r1 - R.r0 + 1, selW = R.c1 - R.c0 + 1;
     const repR = selH > clip.h && selH % clip.h === 0 ? selH / clip.h : 1;
     const repC = selW > clip.w && selW % clip.w === 0 ? selW / clip.w : 1;
-    this.mutate(() => {
-      this.ensureSize(tr + clip.h * repR, tc + clip.w * repC);
-      const S = this.S;
-      for (let a = 0; a < repR; a++)
-        for (let b = 0; b < repC; b++) {
-          const or = tr + a * clip.h, oc = tc + b * clip.w, dr = or - clip.r0, dc = oc - clip.c0;
-          this.unmergeArea(or, oc, or + clip.h - 1, oc + clip.w - 1);
-          for (let i = 0; i < clip.h; i++)
-            for (let j = 0; j < clip.w; j++) {
-              const r = or + i, c = oc + j;
-              if (r >= MAXR || c >= MAXC) continue;
-              const src = clip.cells[i][j];
-              if (src) {
-                let v = src.v;
-                if (v[0] === '=') v = xform(v, shiftMap(dr, dc));
-                S.cells[key(r, c)] = cloneCell(src, v);
-              } else delete S.cells[key(r, c)];
-            }
-          (clip.merges || []).forEach((m) => {
-            if (or + m.r1 < MAXR && oc + m.c1 < MAXC) S.merges.push({ r0: or + m.r0, c0: oc + m.c0, r1: or + m.r1, c1: oc + m.c1 });
-          });
-        }
-      this.sel = { ar: tr, ac: tc, fr: Math.min(MAXR - 1, tr + clip.h * repR - 1), fc: Math.min(MAXC - 1, tc + clip.w * repC - 1) };
+    const address = this.addressOf({ r0: tr, c0: tc, r1: Math.min(MAXR - 1, tr + clip.h * repR - 1), c1: Math.min(MAXC - 1, tc + clip.w * repC - 1) });
+    this.gate({ title: 'Paste', message: 'Paste into ' + address + '? This replaces what is there now.', danger: true, confirmLabel: 'Paste' }, () => {
+      this.mutate(() => {
+        this.ensureSize(tr + clip.h * repR, tc + clip.w * repC);
+        const S = this.S;
+        for (let a = 0; a < repR; a++)
+          for (let b = 0; b < repC; b++) {
+            const or = tr + a * clip.h, oc = tc + b * clip.w, dr = or - clip.r0, dc = oc - clip.c0;
+            this.unmergeArea(or, oc, or + clip.h - 1, oc + clip.w - 1);
+            for (let i = 0; i < clip.h; i++)
+              for (let j = 0; j < clip.w; j++) {
+                const r = or + i, c = oc + j;
+                if (r >= MAXR || c >= MAXC) continue;
+                const src = clip.cells[i][j];
+                if (src) {
+                  let v = src.v;
+                  if (v[0] === '=') v = xform(v, shiftMap(dr, dc));
+                  S.cells[key(r, c)] = cloneCell(src, v);
+                } else delete S.cells[key(r, c)];
+              }
+            (clip.merges || []).forEach((m) => {
+              if (or + m.r1 < MAXR && oc + m.c1 < MAXC) S.merges.push({ r0: or + m.r0, c0: oc + m.c0, r1: or + m.r1, c1: oc + m.c1 });
+            });
+          }
+        this.sel = { ar: tr, ac: tc, fr: Math.min(MAXR - 1, tr + clip.h * repR - 1), fc: Math.min(MAXC - 1, tc + clip.w * repC - 1) };
+      });
+      this.reveal();
+      this.emit();
     });
-    this.reveal();
-    this.emit();
   }
   pasteText(t: string) {
     const lines = t.replace(/\r\n/g, '\n').replace(/\n$/, '').split('\n').map((l) => l.split('\t'));
     const R = this.rng();
     let w = 0;
     lines.forEach((l) => { w = Math.max(w, l.length); });
-    this.mutate(() => {
-      this.ensureSize(R.r0 + lines.length, R.c0 + w);
-      this.unmergeArea(R.r0, R.c0, R.r0 + lines.length - 1, R.c0 + w - 1);
-      lines.forEach((l, i) => {
-        l.forEach((v, j) => {
-          const r = R.r0 + i, c = R.c0 + j;
-          if (r >= MAXR || c >= MAXC) return;
-          v = v.trim();
-          if (v[0] === '=') v = v.toUpperCase();
-          setCell(this.S, r, c, { v });
+    const address = this.addressOf({ r0: R.r0, c0: R.c0, r1: Math.min(MAXR - 1, R.r0 + lines.length - 1), c1: Math.min(MAXC - 1, R.c0 + w - 1) });
+    this.gate({ title: 'Paste', message: 'Paste into ' + address + '? This replaces what is there now.', danger: true, confirmLabel: 'Paste' }, () =>
+      this.mutate(() => {
+        this.ensureSize(R.r0 + lines.length, R.c0 + w);
+        this.unmergeArea(R.r0, R.c0, R.r0 + lines.length - 1, R.c0 + w - 1);
+        lines.forEach((l, i) => {
+          l.forEach((v, j) => {
+            const r = R.r0 + i, c = R.c0 + j;
+            if (r >= MAXR || c >= MAXC) return;
+            v = v.trim();
+            if (v[0] === '=') v = v.toUpperCase();
+            setCell(this.S, r, c, { v });
+          });
         });
-      });
-      this.sel = { ar: R.r0, ac: R.c0, fr: Math.min(MAXR - 1, R.r0 + lines.length - 1), fc: Math.min(MAXC - 1, R.c0 + w - 1) };
-    });
+        this.sel = { ar: R.r0, ac: R.c0, fr: Math.min(MAXR - 1, R.r0 + lines.length - 1), fc: Math.min(MAXC - 1, R.c0 + w - 1) };
+      }),
+    );
   }
   // the Paste button: our own copy first, otherwise whatever text is on the system clipboard
   paste() {
@@ -801,27 +881,48 @@ export class Store {
     for (let r = R.r0; r <= R.r1; r++) for (let c = R.c0; c <= R.c1; c++) fn(r, c);
   }
   clearSel() {
-    this.mutate(() => this.eachSel((r, c) => setCell(this.S, r, c, { v: '' })));
+    let any = false;
+    this.eachSel((r, c) => { const x = this.S.cells[key(r, c)]; if (x && x.v !== '') any = true; });
+    if (!any) return;
+    const address = this.addressOf(this.rng());
+    this.gate(
+      { title: 'Clear ' + address, message: 'Clear the contents of ' + address + '?', danger: true, confirmLabel: 'Clear' },
+      () => this.mutate(() => this.eachSel((r, c) => setCell(this.S, r, c, { v: '' }))),
+    );
   }
   toggleBold() {
     let all = true;
     this.eachSel((r, c) => { const x = this.S.cells[key(r, c)]; if (!x || !x.b) all = false; });
-    this.mutate(() => this.eachSel((r, c) => setCell(this.S, r, c, { b: all ? 0 : 1 })));
+    const address = this.addressOf(this.rng());
+    const message = all ? 'Remove bold from ' + address + '?' : 'Make ' + address + ' bold?';
+    this.gate(
+      { title: 'Bold', message, confirmLabel: all ? 'Remove' : 'Bold' },
+      () => this.mutate(() => this.eachSel((r, c) => setCell(this.S, r, c, { b: all ? 0 : 1 }))),
+    );
   }
   setFill(n: number) {
     const o = this.fillOpacity;
-    this.mutate(() => this.eachSel((r, c) => setCell(this.S, r, c, n ? { f: n, o } : { f: 0 })));
+    const address = this.addressOf(this.rng());
+    const message = n ? 'Fill ' + address + ' with ' + fillName(n) + ' at ' + o + '% opacity?' : 'Remove the fill colour from ' + address + '?';
+    this.gate(
+      { title: n ? 'Fill colour' : 'Remove fill', message, danger: !n, confirmLabel: n ? 'Fill' : 'Remove' },
+      () => this.mutate(() => this.eachSel((r, c) => setCell(this.S, r, c, n ? { f: n, o } : { f: 0 }))),
+    );
   }
   // change how see-through the fill is: remembered for the next fill, and applied to filled cells in the selection
   setOpacity(p: number, apply: boolean) {
     p = clamp(Math.round(p), 10, 100);
     this.fillOpacity = p;
-    try { this.storage?.setItem(UI_KEY, JSON.stringify({ fillOpacity: p })); } catch { /* ignore */ }
+    this.saveUiPrefs();
     if (!apply) { this.emit(); return; }
     let any = false;
     this.eachSel((r, c) => { const x = this.S.cells[key(r, c)]; if (x && x.f && (x.o ?? 100) !== p) any = true; });
-    if (any) this.mutate(() => this.eachSel((r, c) => { const x = this.S.cells[key(r, c)]; if (x && x.f) setCell(this.S, r, c, { o: p }); }));
-    else this.emit();
+    if (!any) { this.emit(); return; }
+    const address = this.addressOf(this.rng());
+    this.gate(
+      { title: 'Fill opacity', message: 'Set the fill opacity to ' + p + '% for ' + address + '?', confirmLabel: 'Set' },
+      () => this.mutate(() => this.eachSel((r, c) => { const x = this.S.cells[key(r, c)]; if (x && x.f) setCell(this.S, r, c, { o: p }); })),
+    );
   }
   // opacity and colour of the active cell, so the picker can show what is selected
   activeFill(): { f: number; o: number } {
@@ -832,19 +933,24 @@ export class Store {
     const R = this.rng();
     if (R.r1 === R.r0) return;
     if (this.hasMerge(R)) { this.flash('Unmerge the cells before filling down.'); return; }
-    this.mutate(() => {
-      const S = this.S;
-      for (let c = R.c0; c <= R.c1; c++) {
-        const src = S.cells[key(R.r0, c)];
-        for (let r = R.r0 + 1; r <= R.r1; r++) {
-          if (src) {
-            let v = src.v;
-            if (v[0] === '=') v = xform(v, shiftMap(r - R.r0, 0));
-            S.cells[key(r, c)] = cloneCell(src, v);
-          } else delete S.cells[key(r, c)];
-        }
-      }
-    });
+    const address = this.addressOf(R);
+    this.gate(
+      { title: 'Fill down', message: 'Fill down into ' + address + '? The rows below the top one are replaced with copies of it.', danger: true, confirmLabel: 'Fill down' },
+      () =>
+        this.mutate(() => {
+          const S = this.S;
+          for (let c = R.c0; c <= R.c1; c++) {
+            const src = S.cells[key(R.r0, c)];
+            for (let r = R.r0 + 1; r <= R.r1; r++) {
+              if (src) {
+                let v = src.v;
+                if (v[0] === '=') v = xform(v, shiftMap(r - R.r0, 0));
+                S.cells[key(r, c)] = cloneCell(src, v);
+              } else delete S.cells[key(r, c)];
+            }
+          }
+        }),
+    );
   }
   private remap(fn: (r: number, c: number) => [number, number] | null) {
     const nc: Record<string, Cell> = {};
@@ -873,44 +979,60 @@ export class Store {
   }
   insertRows(at: number, n: number) {
     if (this.S.rows + n > MAXR) { this.flash('The sheet is limited to ' + MAXR + ' rows.'); return; }
-    this.mutate(() => {
-      this.remap((r, c) => [r >= at ? r + n : r, c]);
-      this.S.rows += n;
-      this.xformAll(insMap('r', at, n));
-      this.adjMerges('r', 'ins', at, n);
-    });
+    const label = n === 1 ? 'a row above row ' + (at + 1) : n + ' rows above row ' + (at + 1);
+    this.gate({ title: 'Insert rows', message: 'Insert ' + label + '?', confirmLabel: 'Insert' }, () =>
+      this.mutate(() => {
+        this.remap((r, c) => [r >= at ? r + n : r, c]);
+        this.S.rows += n;
+        this.xformAll(insMap('r', at, n));
+        this.adjMerges('r', 'ins', at, n);
+      }),
+    );
   }
   deleteRows(at: number, n: number) {
-    this.mutate(() => {
-      this.remap((r, c) => (r < at ? [r, c] : r >= at + n ? [r - n, c] : null));
-      this.S.rows = Math.max(20, this.S.rows - n);
-      this.xformAll(delMap('r', at, n));
-      this.adjMerges('r', 'del', at, n);
-      this.clampSel();
-    });
+    const label = n === 1 ? 'row ' + (at + 1) : 'rows ' + (at + 1) + '-' + (at + n);
+    this.gate(
+      { title: 'Delete rows', message: 'Delete ' + label + '? Formulas that used ' + (n === 1 ? 'it' : 'them') + ' will show #REF!.', danger: true, confirmLabel: 'Delete' },
+      () =>
+        this.mutate(() => {
+          this.remap((r, c) => (r < at ? [r, c] : r >= at + n ? [r - n, c] : null));
+          this.S.rows = Math.max(20, this.S.rows - n);
+          this.xformAll(delMap('r', at, n));
+          this.adjMerges('r', 'del', at, n);
+          this.clampSel();
+        }),
+    );
   }
   insertCols(at: number, n: number) {
     if (this.S.cols + n > MAXC) { this.flash('The sheet is limited to ' + MAXC + ' columns.'); return; }
-    this.mutate(() => {
-      this.remap((r, c) => [r, c >= at ? c + n : c]);
-      this.S.cols += n;
-      const add: number[] = [];
-      for (let i = 0; i < n; i++) add.push(DW);
-      this.S.colW.splice(at, 0, ...add);
-      this.xformAll(insMap('c', at, n));
-      this.adjMerges('c', 'ins', at, n);
-    });
+    const label = n === 1 ? 'a column before column ' + colName(at) : n + ' columns before column ' + colName(at);
+    this.gate({ title: 'Insert columns', message: 'Insert ' + label + '?', confirmLabel: 'Insert' }, () =>
+      this.mutate(() => {
+        this.remap((r, c) => [r, c >= at ? c + n : c]);
+        this.S.cols += n;
+        const add: number[] = [];
+        for (let i = 0; i < n; i++) add.push(DW);
+        this.S.colW.splice(at, 0, ...add);
+        this.xformAll(insMap('c', at, n));
+        this.adjMerges('c', 'ins', at, n);
+      }),
+    );
   }
   deleteCols(at: number, n: number) {
-    this.mutate(() => {
-      this.remap((r, c) => (c < at ? [r, c] : c >= at + n ? [r, c - n] : null));
-      this.S.cols -= n;
-      this.S.colW.splice(at, n);
-      while (this.S.cols < 6) { this.S.cols++; this.S.colW.push(DW); }
-      this.xformAll(delMap('c', at, n));
-      this.adjMerges('c', 'del', at, n);
-      this.clampSel();
-    });
+    const label = n === 1 ? 'column ' + colName(at) : 'columns ' + colName(at) + '-' + colName(at + n - 1);
+    this.gate(
+      { title: 'Delete columns', message: 'Delete ' + label + '? Formulas that used ' + (n === 1 ? 'it' : 'them') + ' will show #REF!.', danger: true, confirmLabel: 'Delete' },
+      () =>
+        this.mutate(() => {
+          this.remap((r, c) => (c < at ? [r, c] : c >= at + n ? [r, c - n] : null));
+          this.S.cols -= n;
+          this.S.colW.splice(at, n);
+          while (this.S.cols < 6) { this.S.cols++; this.S.colW.push(DW); }
+          this.xformAll(delMap('c', at, n));
+          this.adjMerges('c', 'del', at, n);
+          this.clampSel();
+        }),
+    );
   }
   private rowSpan() {
     const R = this.rng(), full = R.r0 === 0 && R.r1 === this.S.rows - 1;
@@ -932,26 +1054,39 @@ export class Store {
     if (!t) return;
     this.commitEdit();
     const R = this.rng(), sz = tplSize(t);
-    this.mutate(() => {
-      this.ensureSize(R.r0 + sz.h, R.c0 + sz.w);
-      this.unmergeArea(R.r0, R.c0, R.r0 + sz.h - 1, R.c0 + sz.w - 1);
-      place(this.S, t, R.r0, R.c0);
-      (TEMPLATE_MERGES[name] || []).forEach((m) => {
-        this.S.merges.push({ r0: R.r0 + m[0], c0: R.c0 + m[1], r1: R.r0 + m[2], c1: R.c0 + m[3] });
+    const label = name === 'meter' ? 'Meter reading' : name === 'budget' ? 'Monthly budget' : name;
+    this.gate({ title: 'Insert block', message: 'Insert the ' + label + ' block at ' + ref(R.r0, R.c0) + '?', confirmLabel: 'Insert' }, () => {
+      this.mutate(() => {
+        this.ensureSize(R.r0 + sz.h, R.c0 + sz.w);
+        this.unmergeArea(R.r0, R.c0, R.r0 + sz.h - 1, R.c0 + sz.w - 1);
+        place(this.S, t, R.r0, R.c0);
+        (TEMPLATE_MERGES[name] || []).forEach((m) => {
+          this.S.merges.push({ r0: R.r0 + m[0], c0: R.c0 + m[1], r1: R.r0 + m[2], c1: R.c0 + m[3] });
+        });
+        this.sel = { ar: R.r0, ac: R.c0, fr: R.r0 + sz.h - 1, fc: R.c0 + sz.w - 1 };
       });
-      this.sel = { ar: R.r0, ac: R.c0, fr: R.r0 + sz.h - 1, fc: R.c0 + sz.w - 1 };
+      this.flash('Block added. Change the numbers, or copy it and paste it further down.');
     });
-    this.flash('Block added. Change the numbers, or copy it and paste it further down.');
   }
   loadExample() {
     this.commitEdit();
-    this.mutate(() => { this.S = sampleData(); this.sel = { ar: 0, ac: 0, fr: 0, fc: 0 }; this.copyRange = null; });
-    this.flash('Example loaded. Try selecting A1:B6, copying it and pasting at A16.');
+    this.gate(
+      { title: 'Load example', message: 'Replace "' + this.curSheet.name + '" with the example? Its current data will be replaced (Undo brings it back).', danger: true, confirmLabel: 'Replace' },
+      () => {
+        this.mutate(() => { this.S = sampleData(); this.sel = { ar: 0, ac: 0, fr: 0, fc: 0 }; this.copyRange = null; });
+        this.flash('Example loaded. Try selecting A1:B6, copying it and pasting at A16.');
+      },
+    );
   }
   clearTab() {
     this.commitEdit();
-    this.mutate(() => { this.S = blank(); this.sel = { ar: 0, ac: 0, fr: 0, fc: 0 }; this.copyRange = null; });
-    this.flash('Tab cleared. Undo brings it back.');
+    this.gate(
+      { title: 'Clear tab', message: 'Clear all data on "' + this.curSheet.name + '"? Undo brings it back.', danger: true, confirmLabel: 'Clear' },
+      () => {
+        this.mutate(() => { this.S = blank(); this.sel = { ar: 0, ac: 0, fr: 0, fc: 0 }; this.copyRange = null; });
+        this.flash('Tab cleared. Undo brings it back.');
+      },
+    );
   }
 
   /* ---------- tabs ---------- */
@@ -1074,9 +1209,15 @@ export class Store {
     const wb = workbookFromBackup(text);
     if (!wb) { this.flash('That file is not a Household ledger backup.'); return; }
     this.commitEdit();
-    this.pushHist();
-    this.restoreSnap(JSON.stringify(wb));
-    this.flash('Backup opened (' + wb.sheets.length + ' tab' + (wb.sheets.length > 1 ? 's' : '') + '). Undo brings back what you had before.');
+    const n = wb.sheets.length;
+    this.gate(
+      { title: 'Open backup', message: 'Replace everything with this backup (' + n + ' tab' + (n > 1 ? 's' : '') + ')? Undo brings back what you had before.', danger: true, confirmLabel: 'Open' },
+      () => {
+        this.pushHist();
+        this.restoreSnap(JSON.stringify(wb));
+        this.flash('Backup opened (' + n + ' tab' + (n > 1 ? 's' : '') + '). Undo brings back what you had before.');
+      },
+    );
   }
   readBackupFile(f: File | undefined | null) {
     if (!f) return;

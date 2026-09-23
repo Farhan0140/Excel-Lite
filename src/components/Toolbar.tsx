@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import {
   BetweenHorizontalEnd, BetweenHorizontalStart, BetweenVerticalEnd, BetweenVerticalStart, Bold, ClipboardPaste, Copy, PaintBucket, Redo2,
-  SquareDashedMousePointer, TableCellsMerge, TableCellsSplit, Table2, Trash2, Undo2, X,
+  ShieldCheck, SquareDashedMousePointer, TableCellsMerge, TableCellsSplit, Table2, Trash2, Undo2, X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { Store } from '../engine/store';
@@ -60,6 +60,13 @@ export function Toolbar({ store, panel, setPanel }: { store: Store; panel: ToolP
           <IconButton icon={Table2} label="Merge cells, rows and columns" aria-expanded={panel === 'cells'} onClick={() => toggle('cells')} />
           <CellsMenu store={store} open={panel === 'cells'} onClose={after} />
         </div>
+        <Sep />
+        <IconButton
+          icon={ShieldCheck}
+          label={store.confirmMode ? 'Confirm changes: on — every edit asks first' : 'Confirm changes: off — edits apply right away'}
+          aria-pressed={store.confirmMode}
+          onClick={act(() => store.toggleConfirmMode())}
+        />
       </div>
     </div>
   );

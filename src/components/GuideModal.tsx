@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Bold, ClipboardPaste, Copy, PaintBucket, Redo2, SquareDashedMousePointer, Table2, Undo2, X } from 'lucide-react';
+import { Bold, ClipboardPaste, Copy, PaintBucket, Redo2, ShieldCheck, SquareDashedMousePointer, Table2, Undo2, X } from 'lucide-react';
 
 /* ---------- little building blocks used by the guide text ---------- */
 const Code = ({ children }: { children: ReactNode }) => (
@@ -140,6 +140,16 @@ const SECTIONS: Section[] = [
             <>A small orange corner in a cell means it holds a formula.</>,
           ]}
         />
+        <H>Confirm changes</H>
+        <P>
+          Turn on the <b>Confirm changes</b> icon (shield, end of the toolbar) and every edit, delete, formatting change, paste, merge, or row/column
+          change asks a plain question first — <Code>Change A4 from "0" to "10"?</Code> — with <b>Cancel</b> and a coloured Confirm/Delete/Merge button.
+          Nothing happens until you answer. Only one question waits at a time, so an edit is never lost while you decide.
+        </P>
+        <Note>
+          It is <b>on by default</b>. Turn it off any time by tapping the same icon again — your choice is remembered on this device. <b>Undo</b> and
+          <b>Redo</b> are never asked about, since Undo is itself how you take back a change.
+        </Note>
         <H>On a phone</H>
         <List
           items={[
@@ -348,6 +358,7 @@ const SECTIONS: Section[] = [
             [<Bold size={20} aria-label="Bold icon" />, 'Bold', 'Bold on / off (Ctrl + B).'],
             [<PaintBucket size={20} aria-label="Fill colour icon" />, 'Fill colour', 'Colours and opacity for the selected cells.'],
             [<Table2 size={20} aria-label="Cells icon" />, 'Cells', 'Merge, unmerge, insert or delete rows and columns.'],
+            [<ShieldCheck size={20} aria-label="Confirm changes icon" />, 'Confirm changes', 'When lit, every edit asks "Change A4 from 0 to 10?" before it happens. See below.'],
           ]}
         />
         <P>Hover over an icon (or press and hold it on some phones) to see its name.</P>

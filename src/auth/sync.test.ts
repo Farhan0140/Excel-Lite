@@ -115,6 +115,7 @@ describe('SyncManager', () => {
     const { api, state } = fakeApi(initial);
     const kv = memKV();
     const store = new Store(kv, false, wbWith('start'));
+    store.confirmMode = false; // these tests check syncing, not the confirmation layer
     const sync = new SyncManager(store, api, kv, { revision: initial ? initial.revision : 0, dirty: false, status: 'saved' }, { delayMs: 1000, ...opts });
     sync.start();
     return { api, state, kv, store, sync };

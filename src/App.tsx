@@ -15,6 +15,7 @@ import { Sheet } from './components/Grid';
 import { MenuPanel } from './components/MenuPanel';
 import { ThemePanel } from './components/ThemePanel';
 import { GuideModal } from './components/GuideModal';
+import { ConfirmModal } from './components/ConfirmModal';
 
 type Top = 'menu' | 'theme' | 'guide' | 'account' | null;
 
@@ -76,6 +77,7 @@ export default function App({
 
   return (
     <StoreContext.Provider value={store}>
+      <ConfirmModal store={store} />
       {/* everything except the grid and the formula bar hides while the phone keyboard is up */}
       {!kb && (
         <Header
