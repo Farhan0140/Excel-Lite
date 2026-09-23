@@ -7,6 +7,7 @@ import { AccountPanel, SYNC_TEXT, useSyncStatus } from './components/AccountPane
 import { StoreContext, useStoreSync } from './store-context';
 import type { useTheme } from './theme';
 import { useKeyboardMode } from './hooks/useKeyboardMode';
+import { useUnsavedGuard } from './hooks/useUnsavedGuard';
 import { Header, StatusBar, TabBar, Toast } from './components/Bars';
 import { Toolbar } from './components/Toolbar';
 import type { ToolPanel } from './components/Toolbar';
@@ -25,6 +26,7 @@ export default function App({
   useStoreSync(store);
   const syncStatus = useSyncStatus(sync);
   const kb = useKeyboardMode(store);
+  useUnsavedGuard(store, sync);
   const [top, setTop] = useState<Top>(null);
   const [tool, setTool] = useState<ToolPanel>(null);
   const fileIn = useRef<HTMLInputElement>(null);
