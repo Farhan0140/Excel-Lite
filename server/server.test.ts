@@ -211,7 +211,8 @@ describe('bearer token auth (what the mobile app uses instead of a cookie jar)',
     const { r } = await signup();
     const bare = await fetch(`${base}/api/auth/me`, { headers: { authorization: `Bearer ${r.json.token}` } });
     expect(bare.status).toBe(200);
-    expect((await bare.json()).user.email).toBe(r.json.user.email);
+    const bareJson: any = await bare.json();
+    expect(bareJson.user.email).toBe(r.json.user.email);
   });
   it('sign in also returns a usable token', async () => {
     const { email } = await signup();

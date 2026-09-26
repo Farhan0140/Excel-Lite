@@ -7,19 +7,16 @@ import { RecoveryCodeScreen } from './RecoveryCode';
 import type { CodeKind } from './RecoveryCode';
 import { bootstrap, clearScoped, LEGACY_KEYS, scopedStorage, SyncManager } from './sync';
 import type { KV } from './sync';
+import { looksLikeColdStart, retryUntilOk } from './wakeServer';
+import { initSqlStorage } from '../storage/sqlite';
 import { Store } from '../engine/store';
 import { useTheme } from '../theme';
 import App from '../App';
 
 const CACHED_USER = 'hl-last-user';
 
-const browserKV = (): (KV & { key(i: number): string | null; length: number }) | null => {
-  try {
-    return window.localStorage;
-  } catch {
-    return null; // storage blocked: the app still works, it just cannot keep a copy on this device
-  }
-};
+type BrowserKV = KV & { key(i: number): string | null; length: number };
+
 const memoryKV = (): KV => {
   const m = new Map<string, string>();
   return { getItem: (k) => m.get(k) ?? null, setItem: (k, v) => void m.set(k, v), removeItem: (k) => void m.delete(k) };
@@ -27,46 +24,86 @@ const memoryKV = (): KV => {
 
 type Phase =
   | { t: 'loading' }
+  | { t: 'waking'; attempt: number }
   | { t: 'offline' }
   | { t: 'anon'; notice?: string; email?: string }
   | { t: 'code'; user: User; code: string; kind: CodeKind }
-  | { t: 'authed'; user: User };
+  | { t: 'authed'; user: User; kv: BrowserKV | null };
 
 export default function Root() {
   const theme = useTheme(); // applies the saved colours to every screen, including sign in
   const [phase, setPhase] = useState<Phase>({ t: 'loading' });
   const [attempt, setAttempt] = useState(0);
+  const [kv, setKv] = useState<BrowserKV | null | undefined>(undefined); // undefined = still opening SQLite
+
+  // open the on-device database once, before anything else touches storage
+  useEffect(() => {
+    let dead = false;
+    (async () => {
+      const store = await initSqlStorage().catch(() => null); // storage blocked: app still works, just no on-device copy
+      if (!dead) setKv(store);
+    })();
+    return () => { dead = true; };
+  }, []);
 
   // who am I? (the browser sends the session cookie by itself)
   useEffect(() => {
+    if (kv === undefined) return; // wait for the local database to finish opening first
     let dead = false;
     (async () => {
       try {
         const r = await api.me();
         if (dead) return;
-        remember(r.user);
-        setPhase({ t: 'authed', user: r.user });
+        remember(kv, r.user);
+        setPhase({ t: 'authed', user: r.user, kv });
       } catch (e) {
         if (dead) return;
-        if (e instanceof ApiError && e.network) {
-          // no connection: open the copy kept on this device, if this device has been signed in before
-          const cached = readCached();
-          setPhase(cached ? { t: 'authed', user: cached } : { t: 'offline' });
-        } else setPhase({ t: 'anon' });
+        if (e instanceof ApiError && e.status === 401) {
+          setPhase({ t: 'anon' }); // definitely signed out: no point retrying
+          return;
+        }
+        if (!looksLikeColdStart(e)) { setPhase({ t: 'anon' }); return; }
+        // network error, or a 5xx that looks like a still-booting free-tier host: keep retrying the
+        // real request itself (not just a /health ping) until it actually answers, instead of giving
+        // up after one attempt
+        setPhase({ t: 'waking', attempt: 0 });
+        try {
+          const r = await retryUntilOk(() => api.me(), { onAttempt: (n) => { if (!dead) setPhase({ t: 'waking', attempt: n }); } });
+          if (dead) return;
+          remember(kv, r.user);
+          setPhase({ t: 'authed', user: r.user, kv });
+          return;
+        } catch (e2) {
+          if (dead) return;
+          if (e2 instanceof ApiError && e2.status === 401) { setPhase({ t: 'anon' }); return; } // the server woke up and said "not signed in"
+        }
+        // exhausted the wait with no answer at all: open the copy kept on this device, if any
+        const cached = readCached(kv);
+        setPhase(cached ? { t: 'authed', user: cached, kv } : { t: 'offline' });
       }
     })();
     return () => { dead = true; };
-  }, [attempt]);
+  }, [attempt, kv]);
 
   const finish = (user: User, code: string | null, kind: 'signin' | 'signup' | 'reset') => {
-    remember(user);
-    setPhase(code ? { t: 'code', user, code, kind: kind === 'reset' ? 'reset' : 'signup' } : { t: 'authed', user });
+    remember(kv ?? null, user);
+    setPhase(code ? { t: 'code', user, code, kind: kind === 'reset' ? 'reset' : 'signup' } : { t: 'authed', user, kv: kv ?? null });
   };
 
-  if (phase.t === 'loading') {
+  if (phase.t === 'loading' || kv === undefined) {
     return (
       <div className="grid flex-1 place-items-center text-muted" role="status" aria-live="polite">
         <span className="flex items-center gap-2"><Loader2 className="animate-spin" size={20} aria-hidden /> Loading…</span>
+      </div>
+    );
+  }
+  if (phase.t === 'waking') {
+    return (
+      <div className="grid flex-1 place-items-center text-muted" role="status" aria-live="polite">
+        <span className="flex items-center gap-2">
+          <Loader2 className="animate-spin" size={20} aria-hidden />
+          Waking up the server{phase.attempt > 1 ? ` (still trying, attempt ${phase.attempt})` : '…'}
+        </span>
       </div>
     );
   }
@@ -81,19 +118,17 @@ export default function Root() {
   }
   if (phase.t === 'anon') return <AuthScreen onDone={finish} notice={phase.notice} initialEmail={phase.email} />;
   if (phase.t === 'code') {
-    return <RecoveryCodeScreen code={phase.code} email={phase.user.email} kind={phase.kind} onDone={() => setPhase({ t: 'authed', user: phase.user })} />;
+    return <RecoveryCodeScreen code={phase.code} email={phase.user.email} kind={phase.kind} onDone={() => setPhase({ t: 'authed', user: phase.user, kv: kv ?? null })} />;
   }
   return (
     <Session
       key={phase.user.id}
       user={phase.user}
+      kv={phase.kv}
       theme={theme}
       onSignedOut={(clearLocal) => {
-        if (clearLocal) {
-          const kv = browserKV();
-          if (kv) clearScoped(kv, phase.user.id);
-        }
-        try { localStorage.removeItem(CACHED_USER); } catch { /* ignore */ }
+        if (clearLocal && phase.kv) clearScoped(phase.kv, phase.user.id);
+        try { phase.kv?.removeItem(CACHED_USER); } catch { /* ignore */ }
         setPhase({ t: 'anon' });
       }}
       onExpired={() => setPhase({ t: 'anon', email: phase.user.email, notice: 'Your session ended. Sign in again to keep saving. Changes you made are safe on this device.' })}
@@ -101,12 +136,12 @@ export default function Root() {
   );
 }
 
-function remember(u: User) {
-  try { localStorage.setItem(CACHED_USER, JSON.stringify(u)); } catch { /* ignore */ }
+function remember(kv: BrowserKV | null, u: User) {
+  try { (kv ?? localStorage).setItem(CACHED_USER, JSON.stringify(u)); } catch { /* ignore */ }
 }
-function readCached(): User | null {
+function readCached(kv: BrowserKV | null): User | null {
   try {
-    const u = JSON.parse(localStorage.getItem(CACHED_USER) || 'null');
+    const u = JSON.parse((kv ?? localStorage).getItem(CACHED_USER) || 'null');
     return u && typeof u.id === 'string' && typeof u.email === 'string' ? u : null;
   } catch {
     return null;
@@ -115,8 +150,8 @@ function readCached(): User | null {
 
 /* signed in: load the ledger (server copy or this device's copy), then run the sheet with sync switched on */
 function Session({
-  user, theme, onSignedOut, onExpired,
-}: { user: User; theme: ReturnType<typeof useTheme>; onSignedOut: (clearLocal: boolean) => void; onExpired: () => void }) {
+  user, kv: base, theme, onSignedOut, onExpired,
+}: { user: User; kv: BrowserKV | null; theme: ReturnType<typeof useTheme>; onSignedOut: (clearLocal: boolean) => void; onExpired: () => void }) {
   const [ready, setReady] = useState<{ store: Store; sync: SyncManager } | null>(null);
   const [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0);
@@ -126,7 +161,6 @@ function Session({
     let sync: SyncManager | null = null;
     setError('');
     (async () => {
-      const base = browserKV();
       const kv = base ? scopedStorage(base, user.id) : memoryKV();
       try {
         const boot = await bootstrap(api, kv, base);

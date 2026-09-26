@@ -68,9 +68,10 @@ Household Ledger is a small, fast spreadsheet built for everyday money tracking 
 - 🛡️ Salted **scrypt** password hashes, recovery codes stored as a peppered HMAC, lockouts after repeated wrong guesses, per-IP rate limits, strict security headers
 
 **Sync**
-- ☁️ **Local-first** — the ledger opens instantly from a copy on the device and works fully offline
-- 🔄 Autosave about 1.5 s after you stop typing, with automatic retry and a live sync dot on the Account icon
-- 🤝 **Conflict-safe** — if the ledger changed on another device, nothing is overwritten silently: you choose *Use the other version* or *Keep mine*
+- ☁️ **Offline-first, backed by real SQLite** — every read and write goes through an on-device SQLite database (`sql.js` in the browser, `expo-sqlite` on mobile), not just a cache; the device's own copy is the source of truth, so the ledger opens instantly and works fully offline, online or not
+- 🔄 Autosave about 1.5 s after you stop typing, queued and synced to the server automatically once you're back online, with growing-backoff retry and a live sync dot on the Account icon
+- 🤝 **Conflict-safe** — every save is revision-checked, so a change made offline can never silently clobber one made elsewhere: if the ledger moved on another device, nothing is overwritten silently — you choose *Use the other version* or *Keep mine*
+- 🐢 **Cold-start aware** — if the API host is asleep (a free-tier server waking up), the app retries the real request with backoff until it gets a genuine answer, instead of showing an error after one failed try
 - 🧹 Per-user local storage and sign-out clean-up, so a shared browser never shows someone else's ledger
 
 ## 🏗️ Architecture
@@ -80,20 +81,31 @@ flowchart LR
     subgraph Browser["Browser / Phone"]
         UI["React UI<br/>Tailwind · lucide icons"]
         Engine["Spreadsheet engine<br/>formulas · refs · undo · PDF"]
-        Local[("localStorage<br/>per-user copy")]
+        Local[("SQLite<br/>sql.js (web) / expo-sqlite (mobile)<br/>per-user copy — source of truth")]
         Sync["Sync manager<br/>debounce · retry · conflicts"]
     end
 
-    API["Household Ledger API<br/>Express 5 · JWT cookie"]
+    API["Household Ledger API<br/>Express 5 · JWT cookie / bearer token"]
     DB[("PostgreSQL<br/>(Neon)")]
 
     UI <--> Engine
     Engine <--> Local
     Engine -- "onPersist" --> Sync
-    Sync -- "GET/PUT /api/workbook<br/>(revision check)" --> API
-    UI -- "sign in / sign up / reset" --> API
+    Sync -- "GET/PUT /api/workbook<br/>(revision check, retried until online)" --> API
+    UI -- "sign in / sign up / reset<br/>(retried until the server wakes up)" --> API
     API -- pg --> DB
 ```
+
+**Why SQLite, not just localStorage/MMKV:** the workbook, sync queue, and cached session all live in
+actual SQL tables (`src/storage/sqlite.ts` on web, `src/storage/sqlite.ts` in the mobile project) behind
+the same synchronous key/value interface `Store`/`SyncManager` already expected — so the engine code
+needed zero changes. On web, sql.js (SQLite compiled to WebAssembly) keeps the database in memory and
+persists a serialized snapshot to IndexedDB (debounced, and flushed on tab hide/close). On mobile,
+`expo-sqlite`'s synchronous API reads and writes a real on-device `.db` file directly. Either way, a
+write always lands on-device first; `SyncManager` picks it up and pushes it to the server in the
+background, with the existing revision-based optimistic concurrency preventing duplicate or clobbered
+writes — there is no separate operation log to de-duplicate, because every sync sends the whole current
+workbook keyed to the revision it was based on, so replaying the same push twice is a no-op.
 
 ## 🧰 Tech Stack
 
@@ -103,7 +115,7 @@ flowchart LR
 | Framework | React 19 + Vite 8 | Express 5 |
 | Styling | Tailwind CSS 4 (design tokens, 8 palettes × light/dark) | — |
 | Icons & fonts | `lucide-react`, Instrument Sans, Bricolage Grotesque (self-hosted) | — |
-| Data | In-memory engine + `localStorage` cache | PostgreSQL (Neon) via `pg`; JSONB for ledgers |
+| Data | In-memory engine + on-device SQLite (`sql.js` + IndexedDB) | PostgreSQL (Neon) via `pg`; JSONB for ledgers |
 | Dev database | — | PGlite (real Postgres inside Node, zero setup) |
 | Auth | HttpOnly cookie (never touched by JS) | `jose` (JWT HS256) · Node `crypto` scrypt · HMAC-SHA256 |
 | Validation | — | `zod` |
