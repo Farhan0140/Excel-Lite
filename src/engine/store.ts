@@ -654,6 +654,15 @@ export class Store {
     this.extendMode = !this.extendMode;
     this.emit();
   }
+  // touch-friendly cell tap (used by the mobile app, whose Pressable gives no DOM MouseEvent to reuse
+  // onGridMouseDown below): selects the cell, or — when extend is true, e.g. Select range mode — extends
+  // the selection to it. Committing an edit in progress and inserting a cell reference into a formula
+  // being typed are left to the caller, since on a phone those need the on-screen keyboard's own
+  // focus/caret tracking, which this class has no DOM-free way to observe itself.
+  tapCell(r: number, c: number, extend: boolean) {
+    if (extend) { this.sel.fr = r; this.sel.fc = c; } else { this.sel = { ar: r, ac: c, fr: r, fc: c }; }
+    this.selChanged();
+  }
   onGridMouseDown(e: MouseLike) {
     const t = e.target as Element;
     if (t === this.edEl) return;
