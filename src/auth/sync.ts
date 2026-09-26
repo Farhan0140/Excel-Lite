@@ -109,7 +109,9 @@ export class SyncManager {
 
   start() {
     this.store.onPersist = () => this.touch();
-    if (typeof window !== 'undefined') {
+    // React Native defines a `window` global too (so browser-detection checks in shared libraries do
+    // not crash), but it has no addEventListener — so this also confirms the DOM API is really there
+    if (typeof window !== 'undefined' && typeof window.addEventListener === 'function' && typeof document !== 'undefined') {
       const now = () => void this.flush();
       const hide = () => { if (document.visibilityState === 'hidden') void this.flush(true); };
       window.addEventListener('online', now);
