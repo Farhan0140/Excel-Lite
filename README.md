@@ -73,6 +73,7 @@ Household Ledger is a small, fast spreadsheet built for everyday money tracking 
 - 🤝 **Conflict-safe** — every save is revision-checked, so a change made offline can never silently clobber one made elsewhere: if the ledger moved on another device, nothing is overwritten silently — you choose *Use the other version* or *Keep mine*
 - 🐢 **Cold-start aware** — if the API host is asleep (a free-tier server waking up), the app retries the real request with backoff until it gets a genuine answer, instead of showing an error after one failed try
 - 🧹 Per-user local storage and sign-out clean-up, so a shared browser never shows someone else's ledger
+- 📴 **Installable PWA with a real offline app shell** — a service worker precaches the HTML/JS/CSS/fonts/SQLite-wasm, so the installed app opens (and keeps working) with zero connection, not just zero server; a new version is offered as a reload instead of forced mid-edit
 
 ## 🏗️ Architecture
 
@@ -321,7 +322,6 @@ Email is only a username — nothing is emailed or verified, because recovery us
 
 - [ ] Multiple named ledgers per account
 - [ ] More functions (`IF`, `ROUND`, `COUNT`, …)
-- [ ] Installable, fully offline PWA (service worker)
 - [ ] Optional email delivery for recovery codes
 - [ ] Account deletion and full data export
 - [ ] Integration tests against a real Neon branch in CI

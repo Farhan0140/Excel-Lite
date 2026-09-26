@@ -1,8 +1,9 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { TriangleAlert } from 'lucide-react';
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { RefreshCw, TriangleAlert } from 'lucide-react';
 import type { Store } from './engine/store';
 import type { User } from './auth/api';
 import type { SyncManager } from './auth/sync';
+import { pwaUpdate } from './pwa';
 import { AccountPanel, SYNC_TEXT, useSyncStatus } from './components/AccountPanel';
 import { StoreContext, useStoreSync } from './store-context';
 import type { useTheme } from './theme';
@@ -30,6 +31,11 @@ export default function App({
   const [top, setTop] = useState<Top>(null);
   const [tool, setTool] = useState<ToolPanel>(null);
   const fileIn = useRef<HTMLInputElement>(null);
+  const pwa = useSyncExternalStore(pwaUpdate.subscribe, pwaUpdate.getSnapshot);
+
+  useEffect(() => {
+    if (pwa.offlineReady) { store.flash('Ready to work offline.'); pwaUpdate.dismissOfflineReady(); }
+  }, [pwa.offlineReady, store]);
 
   // function suggestions depend on the caret, so refresh them once the inputs have been redrawn
   useLayoutEffect(() => {
@@ -117,6 +123,14 @@ export default function App({
         />
       )}
       {!kb && <Toolbar store={store} panel={tool} setPanel={(p) => { setTop(null); setTool(p); }} />}
+
+      {pwa.needRefresh && (
+        <div role="status" className="mx-2.5 mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-accent/40 bg-softaccent px-3 py-2 text-[13.5px] sm:mx-4">
+          <RefreshCw size={18} className="flex-none text-accent" aria-hidden />
+          <span className="min-w-0 flex-1 basis-56">A new version of the app is ready.</span>
+          <button type="button" onClick={pwaUpdate.apply} className="rounded-lg bg-accent px-3 py-1.5 font-semibold text-onaccent">Reload</button>
+        </div>
+      )}
 
       {/* the ledger was changed on another device while this one had unsaved changes: never overwrite silently */}
       {syncStatus === 'conflict' && (

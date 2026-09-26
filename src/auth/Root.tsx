@@ -63,6 +63,13 @@ export default function Root() {
           return;
         }
         if (!looksLikeColdStart(e)) { setPhase({ t: 'anon' }); return; }
+        // the browser itself has no connection at all (airplane mode, no signal, …): waking-up retries
+        // would just burn ~2 minutes proving what we already know, so go straight to this device's copy
+        if (e instanceof ApiError && e.network && typeof navigator !== 'undefined' && navigator.onLine === false) {
+          const cached = readCached(kv);
+          setPhase(cached ? { t: 'authed', user: cached, kv } : { t: 'offline' });
+          return;
+        }
         // network error, or a 5xx that looks like a still-booting free-tier host: keep retrying the
         // real request itself (not just a /health ping) until it actually answers, instead of giving
         // up after one attempt
@@ -84,6 +91,15 @@ export default function Root() {
     })();
     return () => { dead = true; };
   }, [attempt, kv]);
+
+  // the device had no local copy either, so it's stuck on the "you are offline" screen: try again by
+  // itself the moment the browser sees a connection, instead of waiting for the user to tap the button
+  useEffect(() => {
+    if (phase.t !== 'offline') return;
+    const retry = () => { setPhase({ t: 'loading' }); setAttempt((a) => a + 1); };
+    window.addEventListener('online', retry);
+    return () => window.removeEventListener('online', retry);
+  }, [phase.t]);
 
   const finish = (user: User, code: string | null, kind: 'signin' | 'signup' | 'reset') => {
     remember(kv ?? null, user);
