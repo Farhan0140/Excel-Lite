@@ -1,15 +1,17 @@
-import { useEffect, useState } from 'react';
-import { Loader2, WifiOff } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { FolderOpen, Loader2, WifiOff } from 'lucide-react';
 import { api, ApiError } from './api';
 import type { User } from './api';
 import { AuthScreen, AuthShell, ErrorNote } from './AuthScreen';
 import { RecoveryCodeScreen } from './RecoveryCode';
 import type { CodeKind } from './RecoveryCode';
-import { bootstrap, clearScoped, LEGACY_KEYS, scopedStorage, SyncManager } from './sync';
+import { bootFromBackup, bootstrap, clearScoped, LEGACY_KEYS, scopedStorage, SyncManager } from './sync';
 import type { KV } from './sync';
 import { looksLikeColdStart, retryUntilOk } from './wakeServer';
 import { initSqlStorage } from '../storage/sqlite';
 import { Store } from '../engine/store';
+import { workbookFromBackup } from '../engine/model';
+import type { Workbook } from '../engine/types';
 import { useTheme } from '../theme';
 import App from '../App';
 
@@ -171,6 +173,9 @@ function Session({
   const [ready, setReady] = useState<{ store: Store; sync: SyncManager } | null>(null);
   const [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0);
+  const [backupWb, setBackupWb] = useState<Workbook | null>(null);
+  const [backupError, setBackupError] = useState('');
+  const backupIn = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let dead = false;
@@ -179,7 +184,7 @@ function Session({
     (async () => {
       const kv = base ? scopedStorage(base, user.id) : memoryKV();
       try {
-        const boot = await bootstrap(api, kv, base);
+        const boot = backupWb ? bootFromBackup(kv, backupWb) : await bootstrap(api, kv, base);
         if (dead) return;
         const coarse = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
         const store = new Store(kv, coarse, boot.workbook);
@@ -205,7 +210,17 @@ function Session({
       sync?.stop();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user.id, attempt]);
+  }, [user.id, attempt, backupWb]);
+
+  async function openBackupFile(f: File | undefined | null) {
+    if (!f) return;
+    setBackupError('');
+    if (f.size > 20 * 1024 * 1024) { setBackupError('That file is too large to be a backup.'); return; }
+    const text = await f.text().catch(() => null);
+    const wb = text == null ? null : workbookFromBackup(text);
+    if (!wb) { setBackupError('That file is not a Household ledger backup.'); return; }
+    setBackupWb(wb); // re-runs the effect above, opening straight from this instead of the server
+  }
 
   if (error) {
     return (
@@ -214,8 +229,20 @@ function Session({
         <div className="mb-4"><ErrorNote>{error}</ErrorNote></div>
         <div className="grid grid-cols-2 gap-2">
           <button type="button" onClick={() => setAttempt((a) => a + 1)} className="rounded-lg bg-accent px-4 py-3 text-[15px] font-semibold text-onaccent">Try again</button>
-          <button type="button" onClick={() => { void api.signout().catch(() => {}); onSignedOut(false); }} className="rounded-lg border border-line bg-panel px-4 py-3 text-[15px] font-medium">Sign out</button>
+          <button type="button" onClick={() => backupIn.current?.click()} className="flex items-center justify-center gap-2 rounded-lg border border-line bg-panel px-4 py-3 text-[15px] font-medium hover:border-accent">
+            <FolderOpen size={17} aria-hidden /> Open backup
+          </button>
         </div>
+        {backupError && <div className="mt-3"><ErrorNote>{backupError}</ErrorNote></div>}
+        <p className="mt-3 text-[13px] leading-snug text-muted">If you saved a backup earlier (Menu → Save backup), open it here to keep working offline. It's reconciled with your account once you're back online.</p>
+        <input
+          ref={backupIn}
+          type="file"
+          accept=".json,application/json,text/plain"
+          className="hidden"
+          aria-label="Backup file"
+          onChange={(e) => { void openBackupFile(e.target.files && e.target.files[0]); e.target.value = ''; }}
+        />
       </AuthShell>
     );
   }

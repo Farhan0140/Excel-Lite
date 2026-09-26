@@ -70,6 +70,16 @@ export async function bootstrap(api: Api, kv: KV, legacy: KV | null): Promise<Bo
   return { workbook: remoteWb, revision: remote.revision, dirty: false, status: 'saved', fromLegacy: false };
 }
 
+/* Nothing to open with at all — no connection, and this device never got a copy of its own (a fresh
+   sign-in with no prior session here, or one lost before it could be written down). A backup file the
+   person saved earlier becomes this device's copy: dirty, so it uploads once there is a connection
+   again, and revision 0, so if the server actually moved on since that backup, the usual conflict
+   screen (not a silent overwrite) is what greets it. */
+export function bootFromBackup(kv: KV, workbook: Workbook): Boot {
+  try { kv.setItem(REV, '0'); kv.setItem(DIRTY, '1'); } catch { /* storage full or blocked */ }
+  return { workbook, revision: 0, dirty: true, status: 'offline', fromLegacy: false };
+}
+
 export interface SyncOptions {
   delayMs?: number;
   onExpired?: () => void;
