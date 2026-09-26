@@ -1,6 +1,6 @@
 import { DW, FILL_COUNT, MAXC, MAXR, MAX_TABS } from './types';
 import type { Cell, Merge, Range, Sel, Sheet, SheetData, Workbook } from './types';
-import { canonSheets, colName, delMap, fmt, fmtSheet, insMap, key, ref, rewriteSheet, sheetByName, shiftMap, xform } from './refs';
+import { canonSheets, colName, delMap, expandFetcher, fmt, fmtSheet, insMap, key, ref, rewriteSheet, sheetByName, shiftMap, xform } from './refs';
 import type { RefMap } from './refs';
 import { Evaluator } from './formula';
 import {
@@ -437,9 +437,12 @@ export class Store {
   }
   private applyEdit() {
     if (this.W.cur !== this.edit.si) { this.stashSheet(); this.loadSheet(this.edit.si); }
+    const { r, c } = this.edit;
     let v = this.editText;
-    if (v.trim()[0] === '=') v = canonSheets(v.trim().toUpperCase(), this.W.sheets);
-    const { r, c } = this.edit, cur = this.S.cells[key(r, c)], curV = cur ? cur.v : '';
+    const fetched = expandFetcher(v, r, c); // "row_sum" / "col_sum" -> a real =SUM(...) formula
+    if (fetched) v = fetched;
+    else if (v.trim()[0] === '=') v = canonSheets(v.trim().toUpperCase(), this.W.sheets);
+    const cur = this.S.cells[key(r, c)], curV = cur ? cur.v : '';
     if (curV === v) return;
     const address = ref(r, c);
     this.gate(

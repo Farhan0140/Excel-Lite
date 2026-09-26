@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Store } from './store';
 import { Evaluator } from './formula';
 import { blank, cleanData, setCell, workbookFromBackup, backupText, sampleWorkbook } from './model';
-import { shiftMap, xform, colName, colIdx } from './refs';
+import { shiftMap, xform, colName, colIdx, expandFetcher } from './refs';
 import type { Workbook } from './types';
 
 function mem() {
@@ -19,6 +19,7 @@ function wb(...rows: string[][]): Workbook {
   return { cur: 0, sheets: [{ name: 'Tab1', data: D }] };
 }
 const calc = (rows: string[][], r: number, c: number) => new Evaluator(wb(...rows).sheets).display(0, r, c).t;
+const typeInto = (s: Store, r: number, c: number, v: string) => { s.sel = { ar: r, ac: c, fr: r, fc: c }; s.startEdit(v); s.commitEdit(); };
 
 describe('references', () => {
   it('column names round trip', () => {
@@ -340,5 +341,73 @@ describe('backup files', () => {
     s.insertTemplate('budget');
     expect(s.S.cells['25,1'].v).toBe('=SUM(B22:B25)');
     expect(val(s, 25, 1)).toBe('1,750');
+  });
+});
+
+describe('the row_sum / col_sum fetcher shortcut', () => {
+  it('expands to a real SUM formula over everything before the cell', () => {
+    expect(expandFetcher('row_sum', 3, 20)).toBe('=SUM(A4:T4)'); // U4 -> everything left of column U on row 4
+    expect(expandFetcher('col_sum', 3, 20)).toBe('=SUM(U1:U3)'); // U4 -> everything above row 4 in column U
+  });
+  it('accepts the bare word, with or without =, with or without (), any case, and trims spaces', () => {
+    for (const t of ['row_sum', '=row_sum', 'ROW_SUM', 'RowSum', 'rowsum', 'ROWSUM()', '  =ROW_SUM(  )  ']) {
+      expect(expandFetcher(t, 3, 20)).toBe('=SUM(A4:T4)');
+    }
+  });
+  it('at the very edge of the sheet (nothing before it) becomes an empty, valid SUM', () => {
+    expect(expandFetcher('row_sum', 5, 0)).toBe('=SUM()'); // column A: nothing to its left
+    expect(expandFetcher('col_sum', 0, 5)).toBe('=SUM()'); // row 1: nothing above it
+  });
+  it('is not confused with ordinary text or formulas', () => {
+    expect(expandFetcher('rows summary', 0, 0)).toBeNull();
+    expect(expandFetcher('=SUM(A1:A3)', 0, 0)).toBeNull();
+    expect(expandFetcher('row_sum_report', 0, 0)).toBeNull();
+    expect(expandFetcher('', 0, 0)).toBeNull();
+  });
+
+  it('typing it into a cell writes the SUM formula and calculates immediately', () => {
+    const s = fresh();
+    put(s, 3, 0, '2'); put(s, 3, 1, '3'); put(s, 3, 2, 'text'); put(s, 3, 3, '5'); // A4=2 B4=3 C4=text D4=5
+    typeInto(s, 3, 4, 'row_sum'); // E4
+    expect(s.S.cells['3,4'].v).toBe('=SUM(A4:D4)');
+    expect(val(s, 3, 4)).toBe('10'); // text is skipped, just like a normal SUM range
+  });
+  it('col_sum works the same way, downward through a column', () => {
+    const s = fresh();
+    put(s, 0, 2, '4'); put(s, 1, 2, '6');
+    typeInto(s, 2, 2, 'COL_SUM'); // C3
+    expect(s.S.cells['2,2'].v).toBe('=SUM(C1:C2)');
+    expect(val(s, 2, 2)).toBe('10');
+  });
+  it('is case-insensitive and ignores stray spaces when typed by hand', () => {
+    const s = fresh();
+    put(s, 0, 0, '7');
+    typeInto(s, 1, 0, '  Row_Sum  ');
+    expect(s.S.cells['1,0'].v).toBe('=SUM()'); // column A: nothing to the left, still a valid formula
+    typeInto(s, 5, 0, 'col_sum');
+    expect(val(s, 5, 0)).toBe('7'); // sums A1:A5, which only has the 7
+  });
+  it('behaves like a real formula afterward: shifts when rows/columns are inserted, updates on edits', () => {
+    const s = new Store(mem());
+    s.confirmMode = false;
+    s.W = { cur: 0, sheets: [{ name: 'Tab1', data: blank() }] }; // a genuinely empty sheet, no pre-existing merges
+    put(s, 0, 0, '1'); put(s, 0, 1, '2');
+    typeInto(s, 0, 2, 'row_sum'); // C1 = SUM(A1:B1) = 3
+    expect(val(s, 0, 2)).toBe('3');
+    s.sel = { ar: 0, ac: 1, fr: 0, fc: 1 };
+    s.colLeft(); // insert a column between A and (old) B
+    expect(s.S.cells['0,3'].v).toBe('=SUM(A1:C1)'); // the range grew to include the new column
+    put(s, 0, 0, '10');
+    expect(val(s, 0, 3)).toBe('12'); // 10 + 0(new col) + 2
+  });
+  it('respects confirm mode exactly like any other cell edit', () => {
+    const s = new Store(mem(), false); // confirmMode stays on (the default)
+    put(s, 0, 0, '4'); put(s, 0, 1, '6');
+    typeInto(s, 0, 2, 'row_sum');
+    expect(s.pending).toBeTruthy();
+    expect(s.pending!.message).toBe('Set C1 to "=SUM(A1:B1)"?');
+    expect(s.S.cells['0,2']).toBeUndefined();
+    s.confirmPending();
+    expect(val(s, 0, 2)).toBe('10');
   });
 });

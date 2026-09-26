@@ -121,6 +121,8 @@ flowchart LR
 | `=SUM(B2:B5, D2, 100)` | Mix ranges, cells and numbers |
 | `=Tab1!B6+Tab2!B4` | Read cells from other tabs |
 | `=B4*$E$1` | `$` keeps the rate cell fixed when you copy the formula |
+| `row_sum` in U4 | Writes `=SUM(A4:T4)` — everything left of U4 on row 4 |
+| `col_sum` in U4 | Writes `=SUM(U1:U3)` — everything above U4 in column U |
 
 ## 📂 Project Structure
 

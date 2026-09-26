@@ -67,6 +67,11 @@ function readCookie(req: Request, name: string): string | null {
   }
   return null;
 }
+// a native app has no browser cookie jar to rely on, so it authenticates with a bearer token instead
+function readBearer(req: Request): string | null {
+  const h = req.headers.authorization;
+  return h && h.startsWith('Bearer ') ? h.slice(7).trim() || null : null;
+}
 
 export function createApp(db: Db, cfg: Config) {
   const app = express();
@@ -83,7 +88,9 @@ export function createApp(db: Db, cfg: Config) {
   let dummy: Promise<string> | null = null; // compared against when the email is unknown, so timing does not reveal accounts
   const dummyHash = () => (dummy ??= hashPassword('not-a-real-password', hashParams));
 
-  async function startSession(res: Response, userId: string, tokenVersion: number) {
+  // sets the browser's session cookie AND returns the same token, so a native app (no cookie jar to rely
+  // on) can store it itself and send it back as "Authorization: Bearer <token>" (see readBearer above)
+  async function startSession(res: Response, userId: string, tokenVersion: number): Promise<string> {
     const token = await signSession(cfg.jwtSecret, userId, tokenVersion, cfg.sessionDays);
     res.cookie(COOKIE, token, {
       httpOnly: true, // page scripts can never read the token
@@ -92,6 +99,7 @@ export function createApp(db: Db, cfg: Config) {
       path: '/',
       maxAge: cfg.sessionDays * 86_400_000,
     });
+    return token;
   }
 
   const limiter = (windowMs: number, limit: number) =>
@@ -109,7 +117,7 @@ export function createApp(db: Db, cfg: Config) {
 
   /* signed-in only */
   async function requireAuth(req: Request, res: Response, next: NextFunction) {
-    const token = readCookie(req, COOKIE);
+    const token = readCookie(req, COOKIE) || readBearer(req);
     const s = token ? await readSession(cfg.jwtSecret, token) : null;
     if (!s) throw new HttpError(401, 'unauthenticated', 'Please sign in.');
     const { rows } = await db.query<UserRow>('select id, email, token_version from users where id = $1', [s.sub]);
@@ -158,8 +166,8 @@ export function createApp(db: Db, cfg: Config) {
       if (e?.code === '23505') throw new HttpError(409, 'email_taken', 'An account with this email already exists. Try signing in.');
       throw e;
     }
-    await startSession(res, id, 0);
-    res.status(201).json({ user: { id, email: em }, recoveryCode: code });
+    const token = await startSession(res, id, 0);
+    res.status(201).json({ user: { id, email: em }, recoveryCode: code, token });
   });
 
   /* ---------- sign in ---------- */
@@ -177,8 +185,8 @@ export function createApp(db: Db, cfg: Config) {
     });
     if ('err' in out && out.err) throw out.err;
     const u = (out as { u: UserRow }).u;
-    await startSession(res, u.id, u.token_version);
-    res.json({ user: publicUser(u) });
+    const token = await startSession(res, u.id, u.token_version);
+    res.json({ user: publicUser(u), token });
   });
 
   api.post('/auth/signout', (_req, res) => {
@@ -220,8 +228,8 @@ export function createApp(db: Db, cfg: Config) {
     });
     if ('err' in out && out.err) throw out.err;
     const ok = out as { u: UserRow; version: number; nextCode: string };
-    await startSession(res, ok.u.id, ok.version);
-    res.json({ user: publicUser(ok.u), recoveryCode: ok.nextCode });
+    const token = await startSession(res, ok.u.id, ok.version);
+    res.json({ user: publicUser(ok.u), recoveryCode: ok.nextCode, token });
   });
 
   /* ---------- signed in: change password / make a new recovery code ---------- */
@@ -240,8 +248,8 @@ export function createApp(db: Db, cfg: Config) {
       return { version: r.rows[0].token_version };
     });
     if ('err' in out && out.err) throw out.err;
-    await startSession(res, id, (out as { version: number }).version);
-    res.json({ ok: true });
+    const token = await startSession(res, id, (out as { version: number }).version);
+    res.json({ ok: true, token });
   });
 
   api.post('/auth/recovery-code', limiter(15 * 60_000, 20), small, requireAuth, async (req, res) => {

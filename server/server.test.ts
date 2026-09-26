@@ -65,6 +65,7 @@ describe('sign up', () => {
     expect(r.setCookie[0]).toMatch(/hl_session=.+HttpOnly/i);
     expect(r.setCookie[0]).toMatch(/SameSite=Strict/i);
     expect(JSON.stringify(r.json)).not.toMatch(/hash/i);
+    expect(typeof r.json.token).toBe('string'); // a native app has no cookie jar, so it gets the raw token too
   });
   it('never stores the password or the recovery code in clear text', async () => {
     const { r, email } = await signup();
@@ -202,6 +203,50 @@ describe('account settings', () => {
       expect((await client().call('POST', '/api/auth/reset', { email, code, newPassword: 'a brand new password' })).status).toBe(400);
     }
     expect((await client().call('POST', '/api/auth/reset', { email, code: r.json.recoveryCode, newPassword: 'a brand new password' })).status).toBe(200);
+  });
+});
+
+describe('bearer token auth (what the mobile app uses instead of a cookie jar)', () => {
+  it('the token from signup works as "Authorization: Bearer <token>" with no cookie at all', async () => {
+    const { r } = await signup();
+    const bare = await fetch(`${base}/api/auth/me`, { headers: { authorization: `Bearer ${r.json.token}` } });
+    expect(bare.status).toBe(200);
+    expect((await bare.json()).user.email).toBe(r.json.user.email);
+  });
+  it('sign in also returns a usable token', async () => {
+    const { email } = await signup();
+    const r = await client().call('POST', '/api/auth/signin', { email, password: PW });
+    expect(typeof r.json.token).toBe('string');
+    const bare = await fetch(`${base}/api/workbook`, { headers: { authorization: `Bearer ${r.json.token}` } });
+    expect(bare.status).toBe(200);
+  });
+  it('a garbage or missing bearer token is rejected, same as a missing cookie', async () => {
+    expect((await fetch(`${base}/api/auth/me`, { headers: { authorization: 'Bearer not-a-token' } })).status).toBe(401);
+    expect((await fetch(`${base}/api/auth/me`, { headers: { authorization: 'Bearer ' } })).status).toBe(401);
+    expect((await fetch(`${base}/api/auth/me`)).status).toBe(401);
+  });
+  it('changing the password invalidates the old bearer token and the response carries a new one', async () => {
+    const { r, c } = await signup();
+    const oldToken = r.json.token as string;
+    const changed = await c.call('POST', '/api/auth/password', { currentPassword: PW, newPassword: 'a brand new password' });
+    expect(typeof changed.json.token).toBe('string');
+    expect(changed.json.token).not.toBe(oldToken);
+    expect((await fetch(`${base}/api/auth/me`, { headers: { authorization: `Bearer ${oldToken}` } })).status).toBe(401);
+    expect((await fetch(`${base}/api/auth/me`, { headers: { authorization: `Bearer ${changed.json.token}` } })).status).toBe(200);
+  });
+  it('a password reset also returns a fresh, working bearer token', async () => {
+    const { email, code } = await signup();
+    const r = await client().call('POST', '/api/auth/reset', { email, code, newPassword: 'a brand new password' });
+    expect(typeof r.json.token).toBe('string');
+    expect((await fetch(`${base}/api/auth/me`, { headers: { authorization: `Bearer ${r.json.token}` } })).status).toBe(200);
+  });
+  it('a cookie and a bearer token both work independently for the same account, on different "devices"', async () => {
+    const { r, c } = await signup(); // c = a "browser" using the cookie
+    // a second "device" using only the token, no cookie
+    const workbook = await fetch(`${base}/api/workbook`, { headers: { authorization: `Bearer ${r.json.token}` } });
+    expect(workbook.status).toBe(200);
+    // the cookie-based session still works too
+    expect((await c.call('GET', '/api/auth/me')).status).toBe(200);
   });
 });
 

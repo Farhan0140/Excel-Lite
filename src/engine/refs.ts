@@ -92,6 +92,19 @@ export function shiftMap(dr: number, dc: number): RefMap {
     return n < 0 ? null : n;
   };
 }
+/* ---------- "fetcher" shortcuts: row_sum / col_sum ----------
+   Typing row_sum (or col_sum) into a cell and pressing Enter writes a real =SUM(...) formula that
+   adds up everything before that cell in its row (or column) — a quick "autosum", not a hidden
+   function. Because it becomes an ordinary SUM formula, it is visible, editable, and its range shifts
+   correctly if rows or columns are later inserted or deleted, exactly like any other formula. */
+const FETCHER_RE = /^=?\s*(ROW|COL)_?SUM\s*(?:\(\s*\))?\s*$/i;
+export function expandFetcher(text: string, r: number, c: number): string | null {
+  const m = FETCHER_RE.exec(text.trim());
+  if (!m) return null;
+  if (m[1].toUpperCase() === 'ROW') return c <= 0 ? '=SUM()' : '=SUM(' + colName(0) + (r + 1) + ':' + colName(c - 1) + (r + 1) + ')';
+  return r <= 0 ? '=SUM()' : '=SUM(' + colName(c) + 1 + ':' + colName(c) + r + ')';
+}
+
 export function insMap(kind: 'r' | 'c', at: number, n: number): RefMap {
   return (k, i) => (k === kind && i >= at ? i + n : i);
 }

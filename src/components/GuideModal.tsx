@@ -223,6 +223,21 @@ const SECTIONS: Section[] = [
             <>Type <Code>=</Code> and suggestion chips appear. Tap one and it writes the name and brackets for you. Typing <Code>(</Code> adds the closing <Code>)</Code> automatically.</>,
           ]}
         />
+        <H>Quick sum shortcuts: row_sum and col_sum</H>
+        <P>
+          Instead of working out a range yourself, type <Code>row_sum</Code> into a cell and press Enter. It writes a real{' '}
+          <Code>SUM</Code> formula that adds up <b>every cell before it in that row</b> — so <Code>row_sum</Code> typed into U4 becomes{' '}
+          <Code>=SUM(A4:T4)</Code>. Type <Code>col_sum</Code> instead to add up everything <b>above</b> it in the same column — in U4 that
+          becomes <Code>=SUM(U1:U3)</Code>.
+        </P>
+        <List
+          items={[
+            <>It is a shortcut, not a hidden feature: the cell ends up holding an ordinary <Code>SUM</Code> formula you can see and edit like any other.</>,
+            <>Because it is a real formula, it updates as you change the numbers, and its range grows or shrinks correctly if you insert or delete a row or column.</>,
+            <>Works with or without an <Code>=</Code>, any capitalisation, and with or without brackets: <Code>row_sum</Code>, <Code>=ROW_SUM</Code> and <Code>rowsum()</Code> all do the same thing.</>,
+            <>In column A or row 1 there is nothing before the cell, so it becomes <Code>=SUM()</Code>, which is simply 0.</>,
+          ]}
+        />
       </>
     ),
   },

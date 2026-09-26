@@ -27,7 +27,7 @@ function fakeApi(initial: { data: unknown; revision: number } | null = null) {
     signin: async () => { throw new Error('unused'); },
     signout: async () => ({}),
     reset: async () => { throw new Error('unused'); },
-    changePassword: async () => ({}),
+    changePassword: async () => ({ ok: true, token: 'x' }),
     newRecoveryCode: async () => ({ recoveryCode: '123456' }),
     getWorkbook: async () => {
       if (!state.online) throw new ApiError(0, 'network', 'offline');
