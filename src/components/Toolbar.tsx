@@ -1,7 +1,8 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 import {
-  BetweenHorizontalEnd, BetweenHorizontalStart, BetweenVerticalEnd, BetweenVerticalStart, Bold, ClipboardPaste, Copy, PaintBucket, Redo2,
-  ShieldCheck, SquareDashedMousePointer, TableCellsMerge, TableCellsSplit, Table2, Trash2, Undo2, X,
+  BetweenHorizontalEnd, BetweenHorizontalStart, BetweenVerticalEnd, BetweenVerticalStart, Bold, ChevronLeft, ChevronRight,
+  ClipboardPaste, Copy, PaintBucket, Redo2, ShieldCheck, SquareDashedMousePointer, TableCellsMerge, TableCellsSplit, Table2,
+  Trash2, Undo2, X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { Store } from '../engine/store';
@@ -31,6 +32,8 @@ export function Toolbar({ store, panel, setPanel }: { store: Store; panel: ToolP
       <div className="flex items-center gap-0.5 px-2 py-1 sm:px-4 sm:py-1.5">
         <IconButton icon={Undo2} label={'Undo (' + mod + 'Z)'} disabled={!store.hist.length} onClick={act(() => store.undo())} />
         <IconButton icon={Redo2} label={'Redo (' + mod + 'Y)'} disabled={!store.future.length} onClick={act(() => store.redo())} />
+        <Sep />
+        <PageNav store={store} />
         <Sep />
         <IconButton icon={Copy} label={'Copy selection (' + mod + 'C)'} onClick={act(() => store.doCopy(true))} />
         <IconButton icon={ClipboardPaste} label={'Paste at the selected cell (' + mod + 'V)'} onClick={act(() => store.paste())} />
@@ -68,6 +71,71 @@ export function Toolbar({ store, panel, setPanel }: { store: Store; panel: ToolP
           onClick={act(() => store.toggleConfirmMode())}
         />
       </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ page navigation
+   Previous arrow · current page number · Next arrow. A page groups tabs; every page keeps its own
+   active tab and selections. Disabled ends dim to the muted colour (see gotoPage in the Store).
+   Double-click the number (or Menu → Rename page) to rename it inline. */
+function PageNav({ store }: { store: Store }) {
+  const input = useRef<HTMLInputElement>(null);
+  const i = store.W.curPage, n = store.W.pages.length;
+
+  useLayoutEffect(() => {
+    if (store.renamingPage && input.current) { input.current.focus(); input.current.select(); }
+  }, [store.renamingPage]);
+
+  const arrow = (dir: -1 | 1, Icon: typeof ChevronLeft) => {
+    const at = i + dir, disabled = at < 0 || at >= n;
+    return (
+      <button
+        type="button"
+        aria-label={dir < 0 ? 'Previous page' : 'Next page'}
+        aria-disabled={disabled}
+        disabled={disabled}
+        title={disabled ? (dir < 0 ? 'Already on the first page' : 'Already on the last page') : 'Go to page ' + (at + 1)}
+        onClick={() => { store.gotoPage(at); store.focusGrid(); }}
+        className={
+          'grid h-9 w-7 flex-none place-items-center rounded-lg text-ink transition-colors coarse:h-10 sm:w-8 ' +
+          'hover:bg-softaccent active:bg-softaccent disabled:pointer-events-none disabled:text-muted'
+        }
+      >
+        <Icon size={16} aria-hidden className="sm:hidden" />
+        <Icon size={18} aria-hidden className="hidden sm:block" />
+      </button>
+    );
+  };
+  return (
+    <div role="group" aria-label={'Pages: ' + store.pageName() + ', page ' + (i + 1) + ' of ' + n} className="flex flex-none items-center">
+      {arrow(-1, ChevronLeft)}
+      {store.renamingPage ? (
+        <input
+          ref={input}
+          defaultValue={store.pageName()}
+          maxLength={30}
+          aria-label="Page name"
+          spellCheck={false}
+          autoComplete="off"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') { e.preventDefault(); store.finishPageRename(true, e.currentTarget.value); }
+            else if (e.key === 'Escape') { e.preventDefault(); store.finishPageRename(false, ''); }
+          }}
+          onBlur={(e) => store.finishPageRename(true, e.currentTarget.value)}
+          className="w-24 flex-none rounded-full border-2 border-accent bg-cell px-2 py-1 text-[12px] font-semibold text-ink outline-none"
+        />
+      ) : (
+        <span
+          aria-live="polite"
+          title={store.pageName() + ' — page ' + (i + 1) + ' of ' + n + ' (double-click to rename)'}
+          onDoubleClick={() => { if (!store.editing) store.startPageRename(); }}
+          className="flex-none px-0.5 text-center text-[12px] font-semibold leading-none tabular-nums text-ink sm:w-8 sm:text-[12.5px]"
+        >
+          {i + 1}/{n}
+        </span>
+      )}
+      {arrow(1, ChevronRight)}
     </div>
   );
 }

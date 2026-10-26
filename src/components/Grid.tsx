@@ -35,7 +35,7 @@ const Cell = memo(function Cell({ r, c, text, cls, f, o, rs, cs }: CellProps) {
 /* The table itself. It only re-renders when the data, the selection or the column widths change,
    never while you are typing. */
 const Grid = memo(function Grid({ store }: { store: Store; ver: number; selVer: number; wver: number }) {
-  const S = store.S, R = store.rng(), sel = store.sel, q = store.copyRange, cover = store.cover, si = store.W.cur;
+  const S = store.S, R = store.rng(), sel = store.sel, q = store.copyRange, cover = store.cover, si = store.flat;
   const ver = store.ver;
 
   // what every cell shows, worked out once per change of the data

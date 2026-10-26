@@ -1,5 +1,5 @@
-import { DW, FILL_COUNT, LW, MAXC, MAXR } from './types';
-import type { Cell, Sheet, SheetData, Workbook } from './types';
+import { DW, FILL_COUNT, LW, MAXC, MAX_PAGES, MAXR, MAX_TABS } from './types';
+import type { Cell, Page, Sheet, SheetData, Workbook } from './types';
 import { key, shiftMap, xform } from './refs';
 
 export function blank(): SheetData {
@@ -93,7 +93,7 @@ export function sampleWorkbook(): Workbook {
     '3,0': { v: 'All bills', b: 1, f: 1 }, '3,1': { v: '=B2+B3', b: 1, f: 1 },
   };
   D2.merges = [{ r0: 0, c0: 0, r1: 0, c1: 1 }];
-  return { cur: 0, sheets: [{ name: 'Tab1', data: S }, { name: 'Tab2', data: D2 }] };
+  return { curPage: 0, pages: [{ cur: 0, sheets: [{ name: 'Tab1', data: S }, { name: 'Tab2', data: D2 }] }] };
 }
 
 /* ---------- storage ---------- */
@@ -113,24 +113,62 @@ function normData(o: any): SheetData | null {
   return null;
 }
 
+// cheap whole-workbook clamp used all over the model (Math.floor of anything falsy -> 0)
+const atLeast = (n: number) => Math.max(0, Math.floor(+n) || 0);
+const between = (n: number, lo: number, hi: number) => Math.min(Math.max(n, lo), hi);
+// a page name is a label only (nothing references it), so just trim and cap the length
+const pageNameOf = (pg: any): string | undefined => {
+  const nm = pg && typeof pg.name === 'string' ? pg.name.trim().slice(0, 30) : '';
+  return nm || undefined;
+};
+
+// a stored/parsed workbook in the CURRENT multi-page shape
+function pagesFrom(o: any): Workbook | null {
+  if (!o || !Array.isArray(o.pages)) return null;
+  const pages: Page[] = [];
+  o.pages.slice(0, MAX_PAGES).forEach((pg: any) => {
+    const sheets: Sheet[] = [];
+    (Array.isArray(pg && pg.sheets) ? pg.sheets : []).forEach((x: any, i: number) => {
+      const d = normData(x && x.data);
+      const nm = x && x.name ? String(x.name).replace(/^Tab (\d+)$/, 'Tab$1').replace(/[!':]/g, '').slice(0, 30) : '';
+      if (d) sheets.push({ name: nm || 'Tab' + (i + 1), data: d });
+    });
+    if (sheets.length) pages.push({ name: pageNameOf(pg), cur: between(atLeast(pg && pg.cur), 0, sheets.length - 1), sheets });
+  });
+  if (!pages.length) return null;
+  return { curPage: between(atLeast(o.curPage), 0, pages.length - 1), pages };
+}
+
+// the pre-pages shape ({cur, sheets}), still what old local copies, old backups and the original
+// single-file app save: it becomes a workbook whose Page 1 is those tabs
+function legacySheetsFrom(o: any): Workbook | null {
+  const list: Sheet[] = [];
+  if (o && Array.isArray(o.sheets))
+    o.sheets.forEach((x: any, i: number) => {
+      const d = normData(x && x.data);
+      const nm = x && x.name ? String(x.name).replace(/^Tab (\d+)$/, 'Tab$1').replace(/[!':]/g, '').slice(0, 30) : '';
+      if (d) list.push({ name: nm || 'Tab' + (i + 1), data: d });
+    });
+  else {
+    const one = o && normData(o);
+    if (one) list.push({ name: 'Tab1', data: one });
+  }
+  if (!list.length) return null;
+  return { curPage: 0, pages: [{ cur: between(atLeast(o && o.cur), 0, list.length - 1), sheets: list }] };
+}
+
 export function loadWorkbook(st: StorageLike | null): Workbook {
   try {
     const t = st && st.getItem(KEY2);
     if (t) {
       const o = JSON.parse(t);
-      const list: Sheet[] = [];
-      if (o && Array.isArray(o.sheets))
-        o.sheets.forEach((x: any, i: number) => {
-          const d = normData(x && x.data);
-          const nm = x && x.name ? String(x.name).replace(/^Tab (\d+)$/, 'Tab$1').replace(/[!':]/g, '').slice(0, 30) : '';
-          if (d) list.push({ name: nm || 'Tab' + (i + 1), data: d });
-        });
-      if (list.length) return { cur: Math.min(Math.max(+o.cur || 0, 0), list.length - 1), sheets: list };
+      const w = pagesFrom(o) ?? legacySheetsFrom(o);
+      if (w) return w;
     }
     const old = st && st.getItem(KEY);
     if (old) {
       const d2 = normData(JSON.parse(old));
-      if (d2) return { cur: 0, sheets: [{ name: 'Tab1', data: d2 }] };
+      if (d2) return { curPage: 0, pages: [{ cur: 0, sheets: [{ name: 'Tab1', data: d2 }] }] };
     }
   } catch {
     /* fall through to the example */
@@ -140,7 +178,7 @@ export function loadWorkbook(st: StorageLike | null): Workbook {
 
 export function saveWorkbook(st: StorageLike | null, W: Workbook) {
   try {
-    st?.setItem(KEY2, JSON.stringify({ cur: W.cur, sheets: W.sheets.map((x) => ({ name: x.name, data: x.data })) }));
+    st?.setItem(KEY2, JSON.stringify({ curPage: W.curPage, pages: W.pages.map((p) => ({ name: p.name, cur: p.cur, sheets: p.sheets.map((x) => ({ name: x.name, data: x.data })) })) }));
   } catch {
     /* storage may be full or blocked */
   }
@@ -185,9 +223,31 @@ export function cleanData(d: any): SheetData | null {
 
 // turn any parsed workbook (backup file, server response, request body) into a safe Workbook, or null when it is not one
 export function cleanWorkbook(o: any): Workbook | null {
+  // multi-page shape
+  if (o && Array.isArray(o.pages)) {
+    const pages: Page[] = [];
+    o.pages.slice(0, MAX_PAGES).forEach((pg: any) => {
+      const used: string[] = []; // sheet names already used on THIS page — duplicates across pages are fine
+      const sheets: Sheet[] = [];
+      (Array.isArray(pg && pg.sheets) ? pg.sheets : []).slice(0, MAX_TABS).forEach((x: any) => {
+        const d = cleanData(x && x.data);
+        if (!d) return;
+        let nm = (x && x.name ? String(x.name) : '').replace(/[!':]/g, '').trim().slice(0, 30) || 'Tab' + (used.length + 1);
+        const base = nm;
+        let n = 2;
+        while (used.includes(nm.toLowerCase())) nm = base.slice(0, 26) + n++;
+        used.push(nm.toLowerCase());
+        sheets.push({ name: nm, data: d });
+      });
+      if (sheets.length) pages.push({ name: pageNameOf(pg), cur: between(atLeast(pg && pg.cur), 0, sheets.length - 1), sheets });
+    });
+    if (!pages.length) return null;
+    return { curPage: between(atLeast(o.curPage), 0, pages.length - 1), pages };
+  }
+  // legacy single-page shape ({sheets} on top, or one bare SheetData) becomes Page 1
   const list: Sheet[] = [];
   if (o && Array.isArray(o.sheets)) {
-    o.sheets.slice(0, 40).forEach((x: any, i: number) => {
+    o.sheets.slice(0, MAX_TABS).forEach((x: any, i: number) => {
       const d = cleanData(x && x.data);
       if (!d) return;
       let nm = (x.name ? String(x.name) : '').replace(/[!':]/g, '').trim().slice(0, 30) || 'Tab' + (i + 1);
@@ -201,7 +261,7 @@ export function cleanWorkbook(o: any): Workbook | null {
     if (one) list.push({ name: 'Tab1', data: one });
   }
   if (!list.length) return null;
-  return { cur: Math.min(Math.max(Math.floor(+o.cur) || 0, 0), list.length - 1), sheets: list };
+  return { curPage: 0, pages: [{ cur: between(atLeast(o && o.cur), 0, list.length - 1), sheets: list }] };
 }
 
 // turn the text of a backup file into a workbook, or null when it is not one
@@ -218,9 +278,9 @@ export function workbookFromBackup(text: string): Workbook | null {
 export function backupText(W: Workbook): string {
   return JSON.stringify({
     app: 'household-ledger',
-    version: 2,
+    version: 3,
     savedAt: new Date().toISOString(),
-    cur: W.cur,
-    sheets: W.sheets.map((x) => ({ name: x.name, data: x.data })),
+    curPage: W.curPage,
+    pages: W.pages.map((p) => ({ name: p.name, cur: p.cur, sheets: p.sheets.map((x) => ({ name: x.name, data: x.data })) })),
   });
 }

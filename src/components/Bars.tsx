@@ -65,7 +65,7 @@ export function Header({
 export function TabBar({ store, kb }: { store: Store; kb: boolean }) {
   const list = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
-  const { W, renaming } = store;
+  const { renaming, sheets, cur } = store;
   const fxKb = kb && store.fxEditing(); // typing a formula on a phone: tabs stay so you can point at other tabs
 
   // focus the rename box right away (inside the tap, so the phone keyboard opens)
@@ -78,12 +78,12 @@ export function TabBar({ store, kb }: { store: Store; kb: boolean }) {
   // keep the current tab in view
   useLayoutEffect(() => {
     if (renaming < 0) list.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-  }, [W.cur, W.sheets.length, renaming]);
+  }, [cur, sheets.length, renaming]);
 
   return (
     <div className={'flex flex-none items-center gap-2 ' + (kb ? 'mx-1.5 mb-1.5' : 'mx-2.5 mt-2 sm:mx-4')}>
-      <div ref={list} role="tablist" aria-label="Tabs" className="no-scrollbar flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto py-0.5">
-        {W.sheets.map((sh, i) =>
+      <div ref={list} role="tablist" aria-label={'Tabs of page ' + (store.W.curPage + 1)} className="no-scrollbar flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto py-0.5">
+        {sheets.map((sh, i) =>
           i === renaming ? (
             <input
               key={i}
@@ -105,7 +105,7 @@ export function TabBar({ store, kb }: { store: Store; kb: boolean }) {
               key={i}
               type="button"
               role="tab"
-              aria-selected={i === W.cur}
+              aria-selected={i === cur}
               data-keep-edit
               title={sh.name + ' (double-click to rename)'}
               onMouseDown={(e) => { if (store.fxEditing()) e.preventDefault(); }}
@@ -118,7 +118,7 @@ export function TabBar({ store, kb }: { store: Store; kb: boolean }) {
               }}
               className={
                 'max-w-[190px] flex-none truncate rounded-full border px-3.5 py-1.5 text-[13px] transition-colors coarse:py-2 ' +
-                (i === W.cur ? 'border-accent bg-accent font-semibold text-onaccent' : 'border-line bg-panel text-ink hover:border-accent')
+                (i === cur ? 'border-accent bg-accent font-semibold text-onaccent' : 'border-line bg-panel text-ink hover:border-accent')
               }
             >
               {sh.name}
@@ -136,19 +136,19 @@ export function TabBar({ store, kb }: { store: Store; kb: boolean }) {
 /* ------------------------------------------------------------------ status line */
 export function StatusBar({ store, syncNote }: { store: Store; syncNote?: string }) {
   // Sum / average of the selected numbers, worked out only when the data or selection changes
-  const stats = useMemo(() => {
-    const R = store.rng(), cnt = (R.r1 - R.r0 + 1) * (R.c1 - R.c0 + 1);
-    let n = 0, sum = 0;
-    if (cnt > 1 && cnt <= 60000) {
-      for (let r = R.r0; r <= R.r1; r++)
-        for (let c = R.c0; c <= R.c1; c++) {
-          const v = store.ev.numberAt(store.W.cur, r, c);
-          if (v !== null) { sum += v; n++; }
-        }
-    }
-    return cnt > 1 && n > 0 ? { sum, avg: sum / n, n } : null;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [store.ver, store.selVer]);
+    const stats = useMemo(() => {
+      const R = store.rng(), cnt = (R.r1 - R.r0 + 1) * (R.c1 - R.c0 + 1);
+      let n = 0, sum = 0;
+      if (cnt > 1 && cnt <= 60000) {
+        for (let r = R.r0; r <= R.r1; r++)
+          for (let c = R.c0; c <= R.c1; c++) {
+            const v = store.ev.numberAt(store.flat, r, c);
+            if (v !== null) { sum += v; n++; }
+          }
+      }
+      return cnt > 1 && n > 0 ? { sum, avg: sum / n, n } : null;
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [store.ver, store.selVer]);
 
   return (
     <footer className="flex flex-none items-center justify-between gap-3 px-3 pb-2 pt-1.5 text-xs text-muted sm:px-5 sm:text-[12.5px]">

@@ -256,15 +256,15 @@ describe('the ledger (workbook)', () => {
     const { c } = await signup();
     expect((await c.call('GET', '/api/workbook')).json).toEqual({ data: null, revision: 0, updatedAt: null });
     const wb = sampleWorkbook();
-    wb.sheets[0].data.cells['20,0'] = { v: 'shaded', b: 1, f: 3, o: 40 };
+    wb.pages[0].sheets[0].data.cells['20,0'] = { v: 'shaded', b: 1, f: 3, o: 40 };
     const put = await c.call('PUT', '/api/workbook', { baseRevision: 0, data: JSON.parse(JSON.stringify(wb)) });
     expect(put.status).toBe(200);
     expect(put.json.revision).toBe(1);
     const got = await c.call('GET', '/api/workbook');
     expect(got.json.revision).toBe(1);
-    expect(got.json.data.sheets.map((s: any) => s.name)).toEqual(['Tab1', 'Tab2']);
-    expect(got.json.data.sheets[0].data.cells['20,0']).toEqual({ v: 'shaded', b: 1, f: 3, o: 40 });
-    expect(got.json.data.sheets[1].data.cells['1,1'].v).toBe('=Tab1!B6');
+    expect(got.json.data.pages[0].sheets.map((s: any) => s.name)).toEqual(['Tab1', 'Tab2']);
+    expect(got.json.data.pages[0].sheets[0].data.cells['20,0']).toEqual({ v: 'shaded', b: 1, f: 3, o: 40 });
+    expect(got.json.data.pages[0].sheets[1].data.cells['1,1'].v).toBe('=Tab1!B6');
   });
   it('keeps every user\'s ledger separate', async () => {
     const a = await signup(), b = await signup();
@@ -299,15 +299,17 @@ describe('the ledger (workbook)', () => {
     };
     expect((await c.call('PUT', '/api/workbook', { baseRevision: 0, data: evil })).status).toBe(200);
     const d = (await c.call('GET', '/api/workbook')).json.data;
-    expect(d.cur).toBe(0);
-    expect(d.sheets[0].name).toBe('abc<script>');
-    const cell = d.sheets[0].data.cells['0,0'];
+    expect(d.curPage).toBe(0); // the old single-page shape came back as Page 1
+    expect(d.pages[0].sheets[0].name).toBe('abc<script>');
+    const cell = d.pages[0].sheets[0].data.cells['0,0'];
     expect(cell.v.length).toBe(2000);
     expect(cell.b).toBe(1);
     expect(cell.f).toBe(0);
-    expect(Object.keys(d.sheets[0].data.cells)).toEqual(['0,0']);
-    expect(d.sheets[0].data.merges).toEqual([]);
+    expect(Object.keys(d.pages[0].sheets[0].data.cells)).toEqual(['0,0']);
+    expect(d.pages[0].sheets[0].data.merges).toEqual([]);
     expect((await c.call('PUT', '/api/workbook', { baseRevision: 1, data: { nothing: true } })).status).toBe(400);
+    expect((await c.call('PUT', '/api/workbook', { baseRevision: 1, data: { pages: [{ sheets: [] }] } })).status).toBe(400);
+    expect((await c.call('PUT', '/api/workbook', { baseRevision: 1, data: { pages: [{ sheets: [{ name: 'x', data: { cells: 'nope' } }] }] } })).status).toBe(400);
     expect((await c.call('PUT', '/api/workbook', { baseRevision: 'x', data: sampleWorkbook() })).status).toBe(400);
     expect((await c.call('PUT', '/api/workbook', '{not json')).status).toBe(400);
   });

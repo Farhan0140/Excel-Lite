@@ -15,7 +15,7 @@ function memKV(): KV & { data: Map<string, string> } {
 function wbWith(text: string): Workbook {
   const D = blank();
   setCell(D, 0, 0, { v: text });
-  return { cur: 0, sheets: [{ name: 'Tab1', data: D }] };
+  return { curPage: 0, pages: [{ cur: 0, sheets: [{ name: 'Tab1', data: D }] }] };
 }
 
 // a fake server that behaves like the real one (revisions, conflicts)
@@ -53,21 +53,21 @@ describe('bootstrap: what to open with', () => {
   it('a new account with no data starts from the example and marks it to be uploaded', async () => {
     const { api } = fakeApi();
     const b = await bootstrap(api, memKV(), null);
-    expect(b.workbook.sheets.length).toBe(2);
+    expect(b.workbook.pages[0].sheets.length).toBe(2);
     expect(b).toMatchObject({ dirty: true, status: 'pending', revision: 0, fromLegacy: false });
   });
   it('a new account takes over the ledger that was on this device before accounts existed', async () => {
     const { api } = fakeApi();
     const legacy = memKV();
-    legacy.setItem('household-ledger-v2', JSON.stringify({ cur: 0, sheets: wbWith('mine').sheets }));
+    legacy.setItem('household-ledger-v2', JSON.stringify({ cur: 0, sheets: [{ name: 'Tab1', data: wbWith('mine').pages[0].sheets[0].data }] }));
     const b = await bootstrap(api, memKV(), legacy);
-    expect(b.workbook.sheets[0].data.cells['0,0'].v).toBe('mine');
+    expect(b.workbook.pages[0].sheets[0].data.cells['0,0'].v).toBe('mine');
     expect(b.fromLegacy).toBe(true);
   });
   it('an existing ledger on the server wins on a clean device', async () => {
     const { api } = fakeApi({ data: wbWith('server'), revision: 4 });
     const b = await bootstrap(api, memKV(), null);
-    expect(b.workbook.sheets[0].data.cells['0,0'].v).toBe('server');
+    expect(b.workbook.pages[0].sheets[0].data.cells['0,0'].v).toBe('server');
     expect(b).toMatchObject({ dirty: false, status: 'saved', revision: 4 });
   });
   it('unsaved work on this device is kept when the server has not changed', async () => {
@@ -76,7 +76,7 @@ describe('bootstrap: what to open with', () => {
     kv.setItem('household-ledger-v2', JSON.stringify(wbWith('offline edit')));
     kv.setItem('sync-dirty', '1'); kv.setItem('sync-rev', '4');
     const b = await bootstrap(api, kv, null);
-    expect(b.workbook.sheets[0].data.cells['0,0'].v).toBe('offline edit');
+    expect(b.workbook.pages[0].sheets[0].data.cells['0,0'].v).toBe('offline edit');
     expect(b).toMatchObject({ dirty: true, status: 'pending' });
   });
   it('unsaved work + a newer server copy is a conflict, not a silent overwrite', async () => {
@@ -86,7 +86,7 @@ describe('bootstrap: what to open with', () => {
     kv.setItem('sync-dirty', '1'); kv.setItem('sync-rev', '4');
     const b = await bootstrap(api, kv, null);
     expect(b).toMatchObject({ dirty: true, status: 'conflict', revision: 7 });
-    expect(b.workbook.sheets[0].data.cells['0,0'].v).toBe('offline edit');
+    expect(b.workbook.pages[0].sheets[0].data.cells['0,0'].v).toBe('offline edit');
   });
   it('offline: opens the copy on this device; with no copy it says so', async () => {
     const { api, state } = fakeApi({ data: wbWith('server'), revision: 4 });
@@ -96,7 +96,7 @@ describe('bootstrap: what to open with', () => {
     kv.setItem('household-ledger-v2', JSON.stringify(wbWith('cached')));
     kv.setItem('sync-rev', '4');
     const b = await bootstrap(api, kv, null);
-    expect(b.workbook.sheets[0].data.cells['0,0'].v).toBe('cached');
+    expect(b.workbook.pages[0].sheets[0].data.cells['0,0'].v).toBe('cached');
     expect(b.status).toBe('offline');
   });
   it('users on one device get separate storage', () => {
@@ -130,7 +130,7 @@ describe('SyncManager', () => {
     expect(state.puts).toBe(1);
     expect(sync.status).toBe('saved');
     expect(sync.revision).toBe(2);
-    expect((state.data as any).sheets[0].data.cells['0,0'].v).toBe('abc');
+    expect((state.data as any).pages[0].sheets[0].data.cells['0,0'].v).toBe('abc');
   });
   it('remembers unsaved work on the device (survives closing the page)', async () => {
     const { kv, store, state } = setup();
@@ -166,7 +166,7 @@ describe('SyncManager', () => {
     api.putWorkbook = slow;
     await vi.advanceTimersByTimeAsync(400);
     expect(sync.status).toBe('saved');
-    expect((state.data as any).sheets[0].data.cells['0,0'].v).toBe('second');
+    expect((state.data as any).pages[0].sheets[0].data.cells['0,0'].v).toBe('second');
   });
   it('another device saved first: stops, reports a conflict, never overwrites', async () => {
     const { state, store, sync } = setup();
@@ -197,7 +197,7 @@ describe('SyncManager', () => {
     type(store, 'mine');
     await vi.advanceTimersByTimeAsync(1100);
     expect(await sync.keepMine()).toBe(true);
-    expect((state.data as any).sheets[0].data.cells['0,0'].v).toBe('mine');
+    expect((state.data as any).pages[0].sheets[0].data.cells['0,0'].v).toBe('mine');
     expect(sync.status).toBe('saved');
     expect(sync.revision).toBe(6);
   });

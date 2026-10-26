@@ -1,5 +1,5 @@
-import type { Sheet } from './types';
-import { colIdx, fmt, parseNum, sheetByName, unq } from './refs';
+import type { Page, Sheet } from './types';
+import { colIdx, fmt, parseNum, unq } from './refs';
 
 /* ---------- formula evaluation ---------- */
 type Val = number | string;
@@ -17,8 +17,15 @@ export class Evaluator {
   private cache = new Map<string, Val | Error>();
   private visiting = new Set<string>();
   private sheets: Sheet[];
+  private pageEnd: number[]; // prefix sums: page p owns flat sheet indexes [pageEnd[p-1], pageEnd[p])
 
-  constructor(sheets: Sheet[]) {
+  constructor(pages: Page[]) {
+    this.pageEnd = [];
+    const sheets: Sheet[] = [];
+    pages.forEach((p) => {
+      sheets.push(...p.sheets);
+      this.pageEnd.push(sheets.length);
+    });
     this.sheets = sheets;
   }
 
@@ -27,11 +34,24 @@ export class Evaluator {
     return { sheet: m[1] ? unq(m[1]) : null, c: colIdx(m[2]), r: +m[3] - 1 };
   }
 
+  private pageIndexOf(si: number): number {
+    for (let p = 0; p < this.pageEnd.length; p++) if (si < this.pageEnd[p]) return p;
+    return this.pageEnd.length - 1;
+  }
+
+  /* Tab names are unique within a page but may repeat across pages (a duplicated page keeps them).
+     A reference resolves against the formula's own page first, and only falls back to the first
+     same-named tab anywhere — so a duplicated page reads its own tabs, while a name its page lacks
+     still reaches other pages. */
   private resolveSheet(name: string | null, si: number): number {
     if (!name) return si;
-    const t = sheetByName(this.sheets, name);
-    if (!t) throw E('#REF!');
-    return this.sheets.indexOf(t);
+    const wanted = name.toLowerCase();
+    const p = this.pageIndexOf(si);
+    const from = p === 0 ? 0 : this.pageEnd[p - 1];
+    const to = this.pageEnd[p];
+    for (let j = from; j < to; j++) if (this.sheets[j].name.toLowerCase() === wanted) return j;
+    for (let j = 0; j < this.sheets.length; j++) if (this.sheets[j].name.toLowerCase() === wanted) return j;
+    throw E('#REF!');
   }
 
   // value of a cell (numbers, text, or throws an Error such as #DIV/0!)

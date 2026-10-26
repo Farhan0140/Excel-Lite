@@ -17,6 +17,8 @@ export function MenuPanel({
   store, open, onClose, onOpenFile, onGuide, onTheme, onAccount,
 }: { store: Store; open: boolean; onClose: () => void; onOpenFile: () => void; onGuide: () => void; onTheme: () => void; onAccount: () => void }) {
   const name = store.curSheet.name;
+  const tabCount = store.allSheets().length;
+  const tabs = (n: number) => n + ' tab' + (n > 1 ? 's' : '');
   const left: Section[] = [
     {
       title: 'File',
@@ -29,7 +31,7 @@ export function MenuPanel({
       title: 'Export',
       items: [
         { icon: FileText, label: 'PDF: this tab', hint: name, run: () => void store.exportPdf(false) },
-        { icon: Files, label: 'PDF: all tabs', hint: store.W.sheets.length + ' tabs in one file', run: () => void store.exportPdf(true) },
+        { icon: Files, label: 'PDF: all tabs', hint: tabs(tabCount) + ' in one file', run: () => void store.exportPdf(true) },
       ],
     },
     {
@@ -44,10 +46,19 @@ export function MenuPanel({
   ];
   const right: Section[] = [
     {
+      title: 'Pages',
+      items: [
+        { icon: FilePlus2, label: 'New page', hint: 'Adds a page with an empty tab', run: () => store.addPage() },
+        { icon: CopyPlus, label: 'Duplicate page', hint: 'Copies "' + store.pageName() + '" with all ' + tabs(store.page.sheets.length), run: () => store.duplicatePage() },
+        { icon: Pencil, label: 'Rename page', hint: 'Rename "' + store.pageName() + '"', run: () => store.startPageRename() },
+        { icon: Trash2, danger: true, label: 'Delete page', hint: 'Removes "' + store.pageName() + '" and all its tabs', run: () => store.deletePage() },
+      ],
+    },
+    {
       title: 'Tabs',
       items: [
         { icon: FilePlus2, label: 'New tab', hint: 'Add an empty tab', run: () => store.addTab() },
-        { icon: Pencil, label: 'Rename', hint: 'Rename "' + name + '"', run: () => store.startRename(store.W.cur) },
+        { icon: Pencil, label: 'Rename', hint: 'Rename "' + name + '"', run: () => store.startRename(store.cur) },
         { icon: CopyPlus, label: 'Copy tab', hint: 'Duplicate with all formulas', run: () => store.copyTab() },
         {
           icon: Trash2,

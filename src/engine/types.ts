@@ -15,11 +15,16 @@ export interface SheetData {
 export interface Sel { ar: number; ac: number; fr: number; fc: number }
 export interface Range { r0: number; c0: number; r1: number; c1: number }
 export interface Sheet { name: string; data: SheetData; _sel?: Sel | null }
-export interface Workbook { cur: number; sheets: Sheet[] }
+// a page groups tabs. Tab names stay unique across the WHOLE workbook, so a formula on one page can
+// still read a cell on another page (the evaluator always sees every sheet, flattened). Page names are
+// labels only (never used in formulas); an unnamed page shows as "Page N" from its position.
+export interface Page { name?: string; cur: number; sheets: Sheet[] }
+export interface Workbook { curPage: number; pages: Page[] }
 
 export const MAXR = 1000;
 export const MAXC = 60;
 export const DW = 118;
 export const LW = 140; // first column of a new tab: narrow enough that column B is visible on a 320px phone
 export const MAX_TABS = 40;
+export const MAX_PAGES = 40;
 export const FILL_COUNT = 8;

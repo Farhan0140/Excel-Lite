@@ -1,4 +1,4 @@
-import type { Cell, Merge, Sheet } from './types';
+import type { Cell, Merge, Page, Sheet } from './types';
 import { DW } from './types';
 import { Evaluator } from './formula';
 import { PDF_FILL } from './palette';
@@ -184,11 +184,12 @@ function makePdf(pages: PageImg[]): Blob {
   return new Blob(chunks, { type: 'application/pdf' });
 }
 
-// list = the tabs to print (all of them, or just the current one); returns null when it would be too long
-export async function buildPdf(allSheets: Sheet[], list: Sheet[]): Promise<{ blob: Blob; pages: number } | null> {
-  const ev = new Evaluator(allSheets);
+// allPages = every page of the workbook (the evaluator resolves tab refs page-locally), list = the tabs to print
+export async function buildPdf(allPages: Page[], list: Sheet[]): Promise<{ blob: Blob; pages: number } | null> {
+  const ev = new Evaluator(allPages);
+  const flat = allPages.flatMap((p) => p.sheets);
   const plans: Plan[] = [];
-  list.forEach((sh) => planSheet(sh, allSheets.indexOf(sh)).forEach((pl) => plans.push(pl)));
+  list.forEach((sh) => planSheet(sh, flat.indexOf(sh)).forEach((pl) => plans.push(pl)));
   if (plans.length > 300) return null;
   if (document.fonts && document.fonts.load) {
     await Promise.race([document.fonts.load('600 13px "Instrument Sans"'), new Promise((r) => setTimeout(r, 1500))]);

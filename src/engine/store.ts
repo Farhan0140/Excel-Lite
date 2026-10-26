@@ -1,10 +1,10 @@
-import { DW, FILL_COUNT, MAXC, MAXR, MAX_TABS } from './types';
-import type { Cell, Merge, Range, Sel, Sheet, SheetData, Workbook } from './types';
+import { DW, FILL_COUNT, MAXC, MAX_PAGES, MAXR, MAX_TABS } from './types';
+import type { Cell, Merge, Page, Range, Sel, Sheet, SheetData, Workbook } from './types';
 import { canonSheets, colName, delMap, expandFetcher, fmt, fmtSheet, insMap, key, ref, rewriteSheet, sheetByName, shiftMap, xform } from './refs';
 import type { RefMap } from './refs';
 import { Evaluator } from './formula';
 import {
-  TEMPLATES, TEMPLATE_MERGES, backupText, blank, cloneCell, loadWorkbook, place, sampleData, saveWorkbook, setCell,
+  TEMPLATES, TEMPLATE_MERGES, backupText, blank, cleanWorkbook, cloneCell, loadWorkbook, place, sampleData, saveWorkbook, setCell,
   tplSize, workbookFromBackup,
 } from './model';
 import type { StorageLike } from './model';
@@ -72,7 +72,7 @@ export class Store {
   extendMode = false;
 
   editing = false;
-  edit = { si: 0, r: 0, c: 0 };
+  edit = { pi: 0, si: 0, r: 0, c: 0 };
   editText = '';
   pendingCaret: { target: InputId; pos: number; focus: boolean } | null = null;
   sugItems: Suggestion[] = [];
@@ -114,7 +114,8 @@ export class Store {
   constructor(storage: StorageLike | null, coarse = false, initial?: Workbook) {
     this.storage = storage;
     this.coarse = coarse;
-    this.W = initial ?? loadWorkbook(storage);
+    // normalises whatever shape comes in (current pages, the pre-pages {cur, sheets}, one bare sheet)
+    this.W = initial ? cleanWorkbook(initial) ?? loadWorkbook(storage) : loadWorkbook(storage);
     this.sel = { ar: 0, ac: 0, fr: 0, fc: 0 };
     try {
       const u = JSON.parse(storage?.getItem(UI_KEY) || '{}');
@@ -150,17 +151,54 @@ export class Store {
     this.emit();
   }
 
+  /* ---------- the current page / sheet ---------- */
+  get page(): Page {
+    return this.W.pages[this.W.curPage];
+  }
+  get sheets(): Sheet[] {
+    return this.page.sheets;
+  }
+  get cur(): number {
+    return this.page.cur;
+  }
+  set cur(i: number) {
+    this.page.cur = i;
+  }
   get S(): SheetData {
-    return this.W.sheets[this.W.cur].data;
+    return this.page.sheets[this.cur].data;
   }
   set S(d: SheetData) {
-    this.W.sheets[this.W.cur].data = d;
+    this.page.sheets[this.cur].data = d;
   }
   get curSheet(): Sheet {
-    return this.W.sheets[this.W.cur];
+    return this.page.sheets[this.cur];
+  }
+  get pageCount(): number {
+    return this.W.pages.length;
+  }
+  /* page names are display-only labels; an unnamed page shows as "Page N" from its position */
+  pageNameAt(i: number): string {
+    return this.W.pages[i].name || 'Page ' + (i + 1);
+  }
+  pageName(): string {
+    return this.pageNameAt(this.W.curPage);
+  }
+  private uniquePageName(base: string): string {
+    const taken = (n: string) => this.W.pages.some((_p, i) => this.pageNameAt(i) === n);
+    base = base.slice(0, 26);
+    if (!taken(base)) return base;
+    for (let k = 2; ; k++) { const n = base + k; if (!taken(n)) return n; }
+  }
+  // every tab in the workbook, page by page: what the evaluator sees (tab names are unique across pages)
+  allSheets(): Sheet[] {
+    return this.W.pages.flatMap((p) => p.sheets);
+  }
+  // index of the tab being shown in allSheets() — what Evaluator calls take as `si`
+  get flat(): number {
+    return this.allSheets().indexOf(this.curSheet);
   }
   get ev(): Evaluator {
-    return this._ev || (this._ev = new Evaluator(this.W.sheets));
+    return this._ev || (this._ev = new Evaluator(this.W.pages));
   }
   get hint() {
     return this.coarse ? HINT_TOUCH : HINT_DESKTOP;
@@ -309,7 +347,7 @@ export class Store {
     this.refresh();
   }
   snapshot(): string {
-    return JSON.stringify({ cur: this.W.cur, sheets: this.W.sheets.map((x) => ({ name: x.name, data: x.data })) });
+    return JSON.stringify({ curPage: this.W.curPage, pages: this.W.pages.map((p) => ({ name: p.name, cur: p.cur, sheets: p.sheets.map((x) => ({ name: x.name, data: x.data })) })) });
   }
   pushHist() {
     this.hist.push(this.snapshot());
@@ -363,13 +401,24 @@ export class Store {
     this.refresh();
   }
   restoreSnap(str: string) {
-    const o = JSON.parse(str), prev = this.W.cur;
+    const o = JSON.parse(str), prevPage = this.W.curPage, prev = this.cur;
     this.stashSheet();
-    const old = this.W.sheets;
-    this.W.sheets = o.sheets.map((x: Sheet, i: number) => ({ name: x.name, data: x.data, _sel: old[i] ? old[i]._sel : null }));
-    this.W.cur = Math.min(o.cur, this.W.sheets.length - 1);
-    if (this.W.cur !== prev) {
-      this.sel = this.W.sheets[this.W.cur]._sel || { ar: 0, ac: 0, fr: 0, fc: 0 };
+    const old = this.W.pages;
+    let i = 0; // global position across pages, so every sheet gets back its own saved selection
+    this.W.pages = o.pages.map((pg: Page) => ({
+      name: pg.name, // the snapshot's own name; absent (undefined) means the pre-rename fallback
+      cur: pg.cur,
+      sheets: pg.sheets.map((x: Sheet) => {
+        const sh = { name: x.name, data: x.data, _sel: null as Sel | null };
+        const oldSheet = old.flatMap((p) => p.sheets)[i];
+        sh._sel = oldSheet ? oldSheet._sel ?? null : null;
+        i++;
+        return sh;
+      }),
+    }));
+    this.W.curPage = Math.min(o.curPage, this.W.pages.length - 1);
+    if (this.W.curPage !== prevPage || this.cur !== prev) {
+      this.sel = this.W.pages[this.W.curPage].sheets[this.cur]._sel || { ar: 0, ac: 0, fr: 0, fc: 0 };
       this.scrollReset();
     }
     this.afterRestore();
@@ -411,7 +460,7 @@ export class Store {
     return c ? c.v : '';
   }
   get editAway() {
-    return this.editing && this.W.cur !== this.edit.si;
+    return this.editing && (this.W.curPage !== this.edit.pi || this.cur !== this.edit.si);
   }
   fxEditing() {
     return this.editing && this.editText[0] === '=';
@@ -423,7 +472,7 @@ export class Store {
     if (this.editing) return;
     if (this.pending) { this.flash('Please confirm or cancel the pending change first.'); return; }
     this.editing = true;
-    this.edit = { si: this.W.cur, r: this.sel.ar, c: this.sel.ac };
+    this.edit = { pi: this.W.curPage, si: this.cur, r: this.sel.ar, c: this.sel.ac };
     this.editText = text;
     this.reveal();
     if (!fromBar) this.setCaret('ed', text.length, true);
@@ -435,13 +484,23 @@ export class Store {
     this.editText = text;
     this.emit();
   }
+  // go back to the sheet an edit belongs to (page first, then tab), as switchTo would
+  private showEditSheet() {
+    if (this.W.curPage !== this.edit.pi) {
+      this.stashSheet();
+      this.W.curPage = Math.min(this.edit.pi, this.W.pages.length - 1);
+      this.loadSheet(Math.min(this.edit.si, this.page.sheets.length - 1));
+      return;
+    }
+    if (this.cur !== this.edit.si) this.loadSheet(this.edit.si);
+  }
   private applyEdit() {
-    if (this.W.cur !== this.edit.si) { this.stashSheet(); this.loadSheet(this.edit.si); }
+    if (this.W.curPage !== this.edit.pi || this.cur !== this.edit.si) this.showEditSheet();
     const { r, c } = this.edit;
     let v = this.editText;
     const fetched = expandFetcher(v, r, c); // "row_sum" / "col_sum" -> a real =SUM(...) formula
     if (fetched) v = fetched;
-    else if (v.trim()[0] === '=') v = canonSheets(v.trim().toUpperCase(), this.W.sheets);
+    else if (v.trim()[0] === '=') v = canonSheets(v.trim().toUpperCase(), this.allSheets());
     const cur = this.S.cells[key(r, c)], curV = cur ? cur.v : '';
     if (curV === v) return;
     const address = ref(r, c);
@@ -465,7 +524,7 @@ export class Store {
   }
   cancelEdit() {
     if (!this.editing) return;
-    if (this.W.cur !== this.edit.si) { this.stashSheet(); this.loadSheet(this.edit.si); }
+    if (this.W.curPage !== this.edit.pi || this.cur !== this.edit.si) this.showEditSheet();
     this.closeEditor();
     this.focusGrid();
   }
@@ -478,7 +537,7 @@ export class Store {
     const sn = this.snap(r, c);
     r = sn[0]; c = sn[1];
     this.sel = { ar: r, ac: c, fr: r, fc: c };
-    this.edit = { si: this.W.cur, r, c };
+    this.edit = { pi: this.W.curPage, si: this.cur, r, c };
     const text = this.rawActive();
     this.editText = text;
     this.reveal();
@@ -493,7 +552,7 @@ export class Store {
     if (this.sugKeys(e)) return;
     if (e.key === 'Enter') {
       e.preventDefault();
-      if (this.coarse && this.editing && this.W.cur === this.edit.si && !this.confirmMode) { this.editNext(); return; }
+      if (this.coarse && this.editing && this.W.curPage === this.edit.pi && this.cur === this.edit.si && !this.confirmMode) { this.editNext(); return; }
       this.commitEdit(); this.focusGrid(); this.move(1, 0, false);
     } else if (e.key === 'Tab') {
       e.preventDefault();
@@ -531,7 +590,7 @@ export class Store {
     const s = i.selectionStart ?? 0, e = i.selectionEnd ?? s, v = i.value;
     let t = ref(r, c);
     const prev = v.slice(0, s).replace(/\s+$/, '').slice(-1);
-    if (this.W.cur !== this.edit.si && prev !== ':') t = fmtSheet(this.curSheet.name) + '!' + t;
+    if ((this.W.curPage !== this.edit.pi || this.cur !== this.edit.si) && prev !== ':') t = fmtSheet(this.curSheet.name) + '!' + t;
     this.replaceRange(i, s, e, t);
   }
 
@@ -557,7 +616,8 @@ export class Store {
     if (startIdx > 0 && /[!'$.]/.test(c.v.charAt(startIdx - 1))) return out;
     const up = tok.toUpperCase();
     FUNCS.forEach((f) => { if (f.name.indexOf(up) === 0) out.push({ kind: 'fn', name: f.name, d: f.d }); });
-    this.W.sheets.forEach((x) => {
+    // suggest the tabs of this page (a same-named tab of another page is shadowed and unreachable by name)
+    this.page.sheets.forEach((x) => {
       if (x.name.toLowerCase().indexOf(tok.toLowerCase()) === 0) out.push({ kind: 'tab', name: x.name, d: 'Use cells from this tab' });
     });
     return out.slice(0, 6);
@@ -671,7 +731,7 @@ export class Store {
     const rh = t.closest('th.rh') as HTMLElement | null, cn = t.closest('th.corner');
     const wasEditing = this.editing;
     if (this.editing) {
-      const away = this.W.cur !== this.edit.si;
+      const away = this.editAway;
       if (td && this.refInsertOK()) { e.preventDefault(); this.insertRef(+td.dataset.r!, +td.dataset.c!); return; }
       // phone: one tap on any other cell jumps the editor there and keeps the keyboard open
       // (off while confirming every change, so a tap can never race a pending confirmation)
@@ -784,7 +844,7 @@ export class Store {
       for (let c = R.c0; c <= R.c1; c++) {
         const cell = S.cells[key(r, c)];
         row.push(cell ? cloneCell(cell) : null);
-        line.push(this.ev.display(this.W.cur, r, c).t);
+        line.push(this.ev.display(this.flat, r, c).t);
       }
       cells.push(row);
       lines.push(line.join('\t'));
@@ -976,13 +1036,13 @@ export class Store {
   // structural change on the CURRENT tab: fix its own formulas and every other tab's references to it
   private xformAll(map: RefMap) {
     const target = this.curSheet;
-    this.W.sheets.forEach((sh) => {
+    this.allSheets().forEach((sh) => {
       const cells = sh.data.cells;
       for (const k in cells) {
         const c = cells[k];
         if (c.v[0] !== '=') continue;
         const m: RefMap = (kind, i, role, abs, name) => {
-          const t = name ? sheetByName(this.W.sheets, name) : sh;
+          const t = name ? this.resolveSheetFor(sh, name) : sh;
           return t === target ? map(kind, i, role, abs, name) : i;
         };
         c.v = xform(c.v, m);
@@ -1101,13 +1161,101 @@ export class Store {
     );
   }
 
+  /* ---------- pages: navigation, creation, duplication ---------- */
+  // switch to page i (0-based): shows that page's tabs, landing on the tab+selection it kept
+  gotoPage(i: number) {
+    i = clamp(i, 0, this.W.pages.length - 1);
+    if (i === this.W.curPage) return;
+    this.commitEdit();
+    this.stashSheet();
+    this.W.curPage = i;
+    this.loadSheet(Math.min(this.page.cur, this.page.sheets.length - 1));
+  }
+  addPage() {
+    if (this.W.pages.length >= MAX_PAGES) { this.flash('That is the maximum of ' + MAX_PAGES + ' pages.'); return; }
+    this.disarm();
+    this.commitEdit(); this.pushHist(); this.stashSheet();
+    // each page is its own little workbook: it starts with a tab called Tab1, just like the example does
+    this.W.pages.push({ name: this.uniquePageName('Page ' + (this.W.pages.length + 1)), cur: 0, sheets: [{ name: 'Tab1', data: blank() }] });
+    this.W.curPage = this.W.pages.length - 1;
+    this.loadSheet(0);
+    this.flash('Page ' + this.pageName() + ' added with an empty tab. Use the arrows or the menu to switch pages.');
+  }
+  // an exact twin of the current page: same page name, same tab names, everything in them. Formulas
+  // inside resolve to the same-named tabs of their own page, so the copy works and stays independent
+  // without renaming anything (a reference that its page lacks still reaches other pages).
+  duplicatePage() {
+    if (this.W.pages.length >= MAX_PAGES) { this.flash('That is the maximum of ' + MAX_PAGES + ' pages.'); return; }
+    this.disarm();
+    this.commitEdit(); this.pushHist(); this.stashSheet();
+    const src = this.page;
+    const clones: Sheet[] = src.sheets.map((sh) => ({ name: sh.name, data: JSON.parse(JSON.stringify(sh.data)), _sel: null }));
+    this.W.pages.push({ name: src.name, cur: Math.min(src.cur, clones.length - 1), sheets: clones });
+    this.W.curPage = this.W.pages.length - 1;
+    this.loadSheet(this.page.cur);
+    this.flash('Page ' + this.pageName() + ' duplicated: ' + clones.length + ' tab' + (clones.length > 1 ? 's' : '') + ' with everything in it, same names, working independently.');
+  }
+  // the whole current page — every tab in it. Cross-page formulas that used its tabs show #REF!.
+  deletePage() {
+    if (this.W.pages.length <= 1) { this.flash('You need at least one page.'); return; }
+    this.commitEdit();
+    const tabs = this.page.sheets.length;
+    const name = this.pageName();
+    const what = name + ' and its ' + tabs + ' tab' + (tabs > 1 ? 's' : '');
+    this.gate(
+      { title: 'Delete page', message: 'Delete ' + what + '? Formulas that use its tabs will show #REF!. Undo brings the page back.', danger: true, confirmLabel: 'Delete' },
+      () => {
+        this.disarm();
+        this.pushHist();
+        const idx = this.W.curPage;
+        const doomed = this.page.sheets.slice(); // identities that are about to disappear
+        this.rewriteAll((_sh, n) => {
+          const t = this.resolveSheetFor(_sh, n);
+          return t && doomed.includes(t) ? null : undefined;
+        });
+        this.W.pages.splice(idx, 1);
+        this.W.curPage = Math.min(idx, this.W.pages.length - 1);
+        this.loadSheet(this.page.cur);
+        this.flash('Page deleted. Undo brings it back.');
+      },
+    );
+  }
+  renamingPage = false;
+  startPageRename() {
+    if (this.renamingPage) return;
+    this.commitEdit();
+    this.disarm();
+    this.renamingPage = true;
+    this.emit();
+  }
+  finishPageRename(doSave: boolean, value: string) {
+    if (!this.renamingPage) return;
+    this.renamingPage = false;
+    if (doSave) {
+      let v = value.trim().slice(0, 30);
+      const old = this.pageName();
+      if (v && v !== old) {
+        if (this.W.pages.some((_p, i) => i !== this.W.curPage && this.pageNameAt(i) === v)) {
+          v = this.uniquePageName(v);
+          this.flash('Another page is already called that, so it became "' + v + '".');
+        }
+        this.pushHist();
+        this.page.name = v;
+        this.save();
+        this.refresh();
+      }
+    }
+    this.emit();
+    this.focusGrid();
+  }
+
   /* ---------- tabs ---------- */
   stashSheet() {
     this.curSheet._sel = this.sel;
   }
   loadSheet(i: number) {
-    this.W.cur = i;
-    const sh = this.W.sheets[i];
+    this.cur = Math.max(0, Math.min(i, this.page.sheets.length - 1));
+    const sh = this.page.sheets[this.cur];
     this.sel = sh._sel || { ar: 0, ac: 0, fr: 0, fc: 0 };
     this.copyRange = null;
     this.clampSel();
@@ -1116,36 +1264,48 @@ export class Store {
     this.save();
   }
   switchTo(i: number, keepEdit = false) {
-    if (i === this.W.cur) return;
+    if (i === this.cur) return;
     if (!(keepEdit && this.fxEditing())) this.commitEdit();
     this.stashSheet();
     this.loadSheet(i);
   }
   uniqueName(base: string): string {
+    // tab names only need to be unique within their page: a duplicated page keeps them all, and a
+    // formula always resolves to the same-named tab of the formula's own page first (see the Evaluator)
     base = base.slice(0, 26);
-    if (!sheetByName(this.W.sheets, base)) return base;
+    if (!sheetByName(this.page.sheets, base)) return base;
     for (let k = 2; ; k++) {
       const n = base + k;
-      if (!sheetByName(this.W.sheets, n)) return n;
+      if (!sheetByName(this.page.sheets, n)) return n;
     }
   }
+  // which tab does `name` mean when written as a formula on sheet `from`? The formula's own page first,
+  // then the first same-named tab anywhere — this mirrors the Evaluator's resolution exactly.
+  private resolveSheetFor(from: Sheet, name: string): Sheet | null {
+    const page = this.W.pages.find((p) => p.sheets.includes(from));
+    if (page) {
+      const t = sheetByName(page.sheets, name);
+      if (t) return t;
+    }
+    return sheetByName(this.allSheets(), name);
+  }
   addTab() {
-    if (this.W.sheets.length >= MAX_TABS) { this.flash('That is the maximum of ' + MAX_TABS + ' tabs.'); return; }
+    if (this.page.sheets.length >= MAX_TABS) { this.flash('A page is limited to ' + MAX_TABS + ' tabs.'); return; }
     this.disarm();
     this.commitEdit(); this.pushHist(); this.stashSheet();
-    let n = this.W.sheets.length + 1, nm: string;
-    for (; ; n++) { nm = 'Tab' + n; if (!sheetByName(this.W.sheets, nm)) break; }
-    this.W.sheets.push({ name: nm, data: blank() });
-    this.loadSheet(this.W.sheets.length - 1);
+    let n = 1, nm: string;
+    for (; ; n++) { nm = 'Tab' + n; if (!sheetByName(this.page.sheets, nm)) break; }
+    this.page.sheets.push({ name: nm, data: blank() });
+    this.loadSheet(this.page.sheets.length - 1);
     this.flash('New empty tab added. In a formula, use ' + nm + '!A1 to read a cell from it.');
   }
   copyTab() {
-    if (this.W.sheets.length >= MAX_TABS) { this.flash('That is the maximum of ' + MAX_TABS + ' tabs.'); return; }
+    if (this.page.sheets.length >= MAX_TABS) { this.flash('A page is limited to ' + MAX_TABS + ' tabs.'); return; }
     this.disarm();
     this.commitEdit(); this.pushHist(); this.stashSheet();
     const cur = this.curSheet;
-    this.W.sheets.splice(this.W.cur + 1, 0, { name: this.uniqueName(cur.name + '_copy'), data: JSON.parse(JSON.stringify(cur.data)) });
-    this.loadSheet(this.W.cur + 1);
+    this.page.sheets.splice(this.cur + 1, 0, { name: this.uniqueName(cur.name + '_copy'), data: JSON.parse(JSON.stringify(cur.data)), _sel: null });
+    this.loadSheet(this.cur + 1);
     this.flash('Tab copied. Every formula works the same in the copy.');
   }
   disarm() {
@@ -1156,7 +1316,7 @@ export class Store {
   }
   // first press arms it ("Sure?"), second press within 4 seconds deletes
   deleteTab(): boolean {
-    if (this.W.sheets.length < 2) { this.flash('You need at least one tab.'); return true; }
+    if (this.page.sheets.length < 2) { this.flash('A page needs at least one tab.'); return true; }
     if (!this.delArm) {
       this.delArm = true;
       this.flash('Press Delete tab again to remove "' + this.curSheet.name + '". Formulas that use it will show #REF!.');
@@ -1168,19 +1328,20 @@ export class Store {
     this.disarm();
     if (this.editing) this.cancelEdit();
     this.pushHist();
-    const i = this.W.cur, nm = this.W.sheets[i].name.toLowerCase();
-    this.rewriteAll((n) => (n.toLowerCase() === nm ? null : undefined));
-    this.W.sheets.splice(i, 1);
-    this.loadSheet(Math.min(i, this.W.sheets.length - 1));
+    const i = this.cur;
+    const doomed = this.page.sheets[i];
+    this.rewriteAll((sh, n) => (this.resolveSheetFor(sh, n) === doomed ? null : undefined));
+    this.page.sheets.splice(i, 1);
+    this.loadSheet(Math.min(i, this.page.sheets.length - 1));
     this.flash('Tab deleted. Undo brings it back.');
     return true;
   }
-  private rewriteAll(fn: (name: string) => string | null | undefined) {
-    this.W.sheets.forEach((sh) => {
+  private rewriteAll(fn: (sh: Sheet, name: string) => string | null | undefined) {
+    this.allSheets().forEach((sh) => {
       const cells = sh.data.cells;
       for (const k in cells) {
         const c = cells[k];
-        if (c.v[0] === '=') c.v = rewriteSheet(c.v, fn);
+        if (c.v[0] === '=') c.v = rewriteSheet(c.v, (n) => fn(sh, n));
       }
     });
   }
@@ -1196,13 +1357,16 @@ export class Store {
     this.renaming = -1;
     if (doSave) {
       let v = value.replace(/[!':]/g, '').trim().slice(0, 30);
-      const old = this.W.sheets[i].name;
+      const renamed = this.page.sheets[i];
+      const old = renamed.name;
       if (v && v !== old) {
-        const clash = this.W.sheets.some((x, j) => j !== i && x.name.toLowerCase() === v.toLowerCase());
+        const clash = this.page.sheets.some((x, j) => j !== i && x.name.toLowerCase() === v.toLowerCase());
         if (clash) { v = this.uniqueName(v); this.flash('That name is already used, so it became "' + v + '".'); }
         this.pushHist();
-        this.rewriteAll((n) => (n.toLowerCase() === old.toLowerCase() ? v : undefined));
-        this.W.sheets[i].name = v;
+        // rewrite formulas whose reference resolves (own page first) to the renamed tab — not every
+        // same-named reference, now that tab names may repeat across pages
+        this.rewriteAll((sh, n) => (this.resolveSheetFor(sh, n) === renamed ? v : undefined));
+        renamed.name = v;
         this.save();
         this.refresh();
       }
@@ -1221,9 +1385,10 @@ export class Store {
     const wb = workbookFromBackup(text);
     if (!wb) { this.flash('That file is not a Household ledger backup.'); return; }
     this.commitEdit();
-    const n = wb.sheets.length;
+    const n = wb.pages.reduce((t, p) => t + p.sheets.length, 0);
+    const pages = wb.pages.length;
     this.gate(
-      { title: 'Open backup', message: 'Replace everything with this backup (' + n + ' tab' + (n > 1 ? 's' : '') + ')? Undo brings back what you had before.', danger: true, confirmLabel: 'Open' },
+      { title: 'Open backup', message: 'Replace everything with this backup (' + n + ' tab' + (n > 1 ? 's' : '') + (pages > 1 ? ', ' + pages + ' pages' : '') + ')? Undo brings back what you had before.', danger: true, confirmLabel: 'Open' },
       () => {
         this.pushHist();
         this.restoreSnap(JSON.stringify(wb));
@@ -1242,11 +1407,11 @@ export class Store {
   async exportPdf(all: boolean) {
     if (this.pdfBusy) return;
     this.commitEdit();
-    const list = all ? this.W.sheets : [this.curSheet];
+    const list = all ? this.allSheets() : [this.curSheet];
     this.pdfBusy = true;
     this.flash('Preparing your PDF…');
     try {
-      const res = await buildPdf(this.W.sheets, list);
+      const res = await buildPdf(this.W.pages, list);
       if (!res) { this.flash('That would be more than 300 pages. Try exporting one tab at a time.'); return; }
       const label = all ? 'all-tabs' : this.curSheet.name.replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'tab';
       const ok = downloadFile(res.blob, 'household-ledger-' + label + '-' + new Date().toISOString().slice(0, 10) + '.pdf', 'application/pdf');

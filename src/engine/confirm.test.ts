@@ -12,7 +12,7 @@ const fresh = () => new Store(mem(), false);
 // (fresh() loads the built-in example, which has real content on most of the first 15 rows)
 function blankStore(): Store {
   const s = new Store(mem(), false);
-  s.W = { cur: 0, sheets: [{ name: 'Tab1', data: blank() }] };
+  s.W = { curPage: 0, pages: [{ cur: 0, sheets: [{ name: 'Tab1', data: blank() }] }] };
   return s;
 }
 const put = (s: Store, r: number, c: number, v: string) => setCell(s.S, r, c, { v });
@@ -303,12 +303,12 @@ describe('paste, blocks, example, clear tab, backups', () => {
   });
   it('opening a backup counts its tabs and only replaces on confirm', () => {
     const s = fresh();
-    const before = s.W.sheets.length;
+    const before = s.W.pages[0].sheets.length;
     s.openBackupText(JSON.stringify(sampleWorkbook()));
     expect(s.pending!.message).toMatch(/^Replace everything with this backup \(2 tabs\)\?/);
-    expect(s.W.sheets.length).toBe(before);
+    expect(s.W.pages[0].sheets.length).toBe(before);
     s.confirmPending();
-    expect(s.W.sheets.map((x) => x.name)).toEqual(['Tab1', 'Tab2']);
+    expect(s.W.pages[0].sheets.map((x: { name: string }) => x.name)).toEqual(['Tab1', 'Tab2']);
   });
   it('a file that is not a backup is rejected before any confirmation is asked', () => {
     const s = fresh();
